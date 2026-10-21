@@ -10,9 +10,9 @@ use crate::math::{v3, Vec3};
 use crate::raster::*;
 use crate::render::{self, DrawOpts};
 use crate::actions::Mode;
-use crate::body::BodyParams;
 use crate::rig;
 use crate::ui::{Panel, UiCmd};
+use crate::custom::{CharacterCustomization, Row, ROWS};
 
 pub const TICK: f32 = 1.0 / 60.0;
 
@@ -43,6 +43,31 @@ pub const fn hk_digit(n: u32) -> u32 {
 pub const HK_SEX: u32 = 1 << 9;
 pub const HK_GEAR: u32 = 1 << 10;
 pub const HK_UI: u32 = 1 << 11;
+/// Customization screen keys (C, R, X, F5, F9, arrows/WASD edges, Enter).
+pub const HK_CUSTOM: u32 = 1 << 12;
+pub const HK_RANDOM: u32 = 1 << 13;
+pub const HK_RESET: u32 = 1 << 14;
+pub const HK_SAVE: u32 = 1 << 15;
+pub const HK_LOAD: u32 = 1 << 16;
+pub const HK_NAV_UP: u32 = 1 << 17;
+pub const HK_NAV_DOWN: u32 = 1 << 18;
+pub const HK_NAV_LEFT: u32 = 1 << 19;
+pub const HK_NAV_RIGHT: u32 = 1 << 20;
+pub const HK_ENTER: u32 = 1 << 21;
+
+/// Help lines shown under the debug panel.
+pub const HELP: [&str; 4] = [
+    "WASD MOVE  SHIFT RUN  SPACE DASH  J SWING",
+    "1-4 ACTIONS  G SEX  T GEAR  F1 PANEL",
+    "C CUSTOMIZE  R RANDOM  X RESET",
+    "F5 SAVE  F9 LOAD  CHARACTER.RON",
+];
+
+/// Customization screen state.
+#[derive(Clone, Debug, Default)]
+pub struct CustomizeUi {
+    pub sel: usize,
+}
 
 /// Gear presets cycled by the T button: (label, main hand, off hand).
 pub const GEAR_PRESETS: [(&str, Option<&str>, Option<&str>); 4] = [
@@ -85,6 +110,17 @@ pub struct Game {
     pub time: f32,
     pub demo: bool,
     rng: u32,
+    /// Cosmetic look applied to the player (body never affects gameplay).
+    pub custom: CharacterCustomization,
+    /// Open customization screen, if any.
+    pub customize: Option<CustomizeUi>,
+    /// RON text the host should write to its save file (taken by the host).
+    pub save_request: Option<String>,
+    /// Set when the host should read its save file and call `load_customization`.
+    pub load_request: bool,
+    /// Short status message and seconds left.
+    pub status: Option<(String, f32)>,
+    random_n: u64,
 }
 
 const PILLARS: [(f32, f32); 4] = [(4.0, -3.0), (-5.0, 2.0), (6.0, 6.0), (-3.0, -7.0)];
@@ -107,6 +143,7 @@ impl Game {
         }
         rows.push((String::new(), UiCmd::ToggleSex));
         rows.push((String::new(), UiCmd::CycleGear));
+        rows.push(("C CUSTOMIZE".into(), UiCmd::Customize));
         let mut panel = Panel::new(rows);
         panel.relabel(UiCmd::ToggleSex, "G MALE".into());
         panel.relabel(UiCmd::CycleGear, format!("T {}", GEAR_PRESETS[0].0));
@@ -133,6 +170,12 @@ impl Game {
             time: 0.0,
             demo: false,
             rng: 0x1234_5678,
+            custom: CharacterCustomization::default(),
+            customize: None,
+            save_request: None,
+            load_request: false,
+            status: None,
+            random_n: 0,
         }
     }
 
@@ -166,7 +209,13 @@ impl Game {
         self.accum = (self.accum + dt.min(0.25)).min(0.25);
         while self.accum >= TICK {
             self.accum -= TICK;
-            let inp = if self.demo { self.demo_input() } else { *input };
+            let inp = if self.demo {
+                self.demo_input()
+            } else if self.customize.is_some() {
+                Input::default() // screen open: the figure idles
+            } else {
+                *input
+            };
             self.tick(&inp);
             input.move_click = None;
             input.attack_click = None;
@@ -196,13 +245,80 @@ impl Game {
                 cmds.push(c);
             }
         }
-        for (bit, c) in [(HK_SEX, UiCmd::ToggleSex), (HK_GEAR, UiCmd::CycleGear), (HK_UI, UiCmd::TogglePanel)] {
+        for (bit, c) in [
+            (HK_SEX, UiCmd::ToggleSex), (HK_GEAR, UiCmd::CycleGear), (HK_UI, UiCmd::TogglePanel),
+            (HK_CUSTOM, UiCmd::Customize),
+        ] {
             if hk & bit != 0 {
                 cmds.push(c);
             }
         }
         for c in cmds {
             self.run_cmd(c);
+        }
+        if hk & HK_RANDOM != 0 { self.custom_row(Row::Randomize); }
+        if hk & HK_RESET != 0 { self.custom_row(Row::Reset); }
+        if hk & HK_SAVE != 0 { self.custom_row(Row::Save); }
+        if hk & HK_LOAD != 0 { self.custom_row(Row::Load); }
+        if let Some(ui) = self.customize.as_mut() {
+            let n = ROWS.len();
+            if hk & HK_NAV_UP != 0 { ui.sel = (ui.sel + n - 1) % n; }
+            if hk & HK_NAV_DOWN != 0 { ui.sel = (ui.sel + 1) % n; }
+            let row = ROWS[ui.sel];
+            let d = (hk & HK_NAV_RIGHT != 0) as i32 - (hk & HK_NAV_LEFT != 0) as i32;
+            let act = matches!(row, Row::Randomize | Row::Reset | Row::Save | Row::Load | Row::Close);
+            if act && (d != 0 || hk & HK_ENTER != 0) {
+                self.custom_row(row);
+            } else if d != 0 {
+                if row == Row::Body {
+                    self.custom.switch_sex();
+                } else {
+                    self.custom.adjust(row, d);
+                }
+                self.apply_custom();
+            }
+        }
+    }
+
+    /// Re-apply `custom` onto the player.
+    pub fn apply_custom(&mut self) {
+        self.custom = self.custom.clamped();
+        self.custom.apply(&mut self.player.def);
+        self.player.refresh_gear(&self.gear);
+        let label = format!("G {}", if self.custom.sex == Sex::Male { "MALE" } else { "FEMALE" });
+        self.panel.relabel(UiCmd::ToggleSex, label);
+    }
+
+    /// Load a saved customization (RON); clamps and applies it.
+    pub fn load_customization(&mut self, src: &str) -> Result<(), String> {
+        let c = CharacterCustomization::from_ron(src)?;
+        self.custom = c;
+        self.apply_custom();
+        Ok(())
+    }
+
+    pub fn set_status(&mut self, s: &str) {
+        self.status = Some((s.to_uppercase(), 2.0));
+    }
+
+    /// Run a customization action row (also bound to R / X / F5 / F9 / C).
+    pub fn custom_row(&mut self, row: Row) {
+        match row {
+            Row::Randomize => {
+                self.random_n += 1;
+                self.custom = CharacterCustomization::random(self.player.def.seed ^ self.random_n.wrapping_mul(0x9e37_79b9));
+                self.apply_custom();
+            }
+            Row::Reset => {
+                self.custom = CharacterCustomization::for_sex(self.custom.sex);
+                self.apply_custom();
+            }
+            Row::Save => {
+                self.save_request = Some(self.custom.to_ron());
+            }
+            Row::Load => self.load_request = true,
+            Row::Close => self.customize = None,
+            _ => {}
         }
     }
 
@@ -213,16 +329,15 @@ impl Game {
             UiCmd::Action(a) => self.pending = Some(a),
             UiCmd::TogglePanel => self.panel.visible = !self.panel.visible,
             UiCmd::ToggleSex => {
-                let d = &mut self.player.def;
-                d.sex = match d.sex {
-                    Sex::Male => Sex::Female,
-                    Sex::Female => Sex::Male,
+                // same seed, gear and personality; other sex, sliders kept
+                self.custom.switch_sex();
+                self.apply_custom();
+            }
+            UiCmd::Customize => {
+                self.customize = match self.customize {
+                    Some(_) => None,
+                    None => Some(CustomizeUi::default()),
                 };
-                // same seed, gear, colours and personality; new sex preset
-                d.body = BodyParams::preset(d.sex);
-                let label = format!("G {}", if d.sex == Sex::Male { "MALE" } else { "FEMALE" });
-                self.player.refresh_gear(&self.gear);
-                self.panel.relabel(UiCmd::ToggleSex, label);
             }
             UiCmd::CycleGear => {
                 self.gear_preset = (self.gear_preset + 1) % GEAR_PRESETS.len();
@@ -316,6 +431,12 @@ impl Game {
             }
         }
         self.flash = (self.flash - TICK).max(0.0);
+        if let Some((_, t)) = self.status.as_mut() {
+            *t -= TICK;
+        }
+        if self.status.as_ref().is_some_and(|s| s.1 <= 0.0) {
+            self.status = None;
+        }
         for g in &mut self.ghosts { g.1 -= TICK; }
         self.ghosts.retain(|g| g.1 > 0.0);
         for t in &mut self.trail { t.2 -= TICK; }
@@ -339,6 +460,7 @@ impl Game {
         let b = c.def.effective_body(&self.gear);
         let mut j = rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway);
         j.chest_bounce = c.chest_spring.x;
+        j.hair_sway = c.hair_sway();
         j
     }
 
@@ -397,6 +519,67 @@ impl Game {
             crate::ui::text(&mut self.fb, 5, y, &st, shade(R_BONE, 3));
             let act = format!("ACTION: {}", self.player.action_id(&self.actions));
             crate::ui::text(&mut self.fb, 5, y + 7, &act, shade(R_BONE, 3));
+            for (k, l) in HELP.iter().enumerate() {
+                crate::ui::text(&mut self.fb, 5, y + 18 + k as i32 * 7, l, shade(R_BONE, 2));
+            }
+        }
+        if self.customize.is_some() {
+            self.draw_customize();
+        }
+        if let Some((s, _)) = &self.status {
+            let (x, y) = (self.fb.w as i32 / 2 - s.len() as i32 * 2, self.fb.h as i32 - 12);
+            crate::ui::text(&mut self.fb, x, y, s, shade(R_GOLD, 5));
+        }
+    }
+
+    /// Customization screen: row list on the left, a large live preview
+    /// (2x, slowly turning through every facing) on the right.
+    fn draw_customize(&mut self) {
+        use crate::ui::{rect, text};
+        let (w, h) = (self.fb.w as i32, self.fb.h as i32);
+        rect(&mut self.fb, 0, 0, w, h, shade(R_STONE, 0), shade(R_STONE, 3));
+        let (ink, dim, hi) = (shade(R_BONE, 5), shade(R_BONE, 2), shade(R_GOLD, 4));
+        text(&mut self.fb, 24, 14, "CUSTOMIZE CHARACTER", hi);
+        let sel = self.customize.as_ref().map(|u| u.sel).unwrap_or(0);
+        for (i, row) in ROWS.iter().enumerate() {
+            let y = 30 + i as i32 * 11 + if i >= 13 { 5 } else { 0 };
+            let (label, val) = self.custom.row_text(*row);
+            let on = i == sel;
+            if on {
+                rect(&mut self.fb, 20, y - 3, 210, 11, shade(R_GOLD, 1), hi);
+            }
+            text(&mut self.fb, 26, y, label, if on { hi } else { ink });
+            if !val.is_empty() {
+                let v = if on { format!("< {val} >") } else { val };
+                text(&mut self.fb, 120, y, &v, if on { hi } else { ink });
+            }
+        }
+        text(&mut self.fb, 24, h - 26, "UP/DOWN SELECT   LEFT/RIGHT CHANGE   ENTER ACTIVATE", dim);
+        text(&mut self.fb, 24, h - 18, "R RANDOM  X RESET  F5 SAVE  F9 LOAD  C CLOSE", dim);
+        // live preview
+        let (pw, ph, s) = (120usize, 168usize, 2usize);
+        let mut fb = Framebuffer::new(pw, ph);
+        fb.color.fill(shade(R_STONE, 2));
+        let cam = Camera::new(pw, ph);
+        let cam = Camera { cx: 0.0, cz: 0.0, ..cam };
+        let c = &self.player;
+        let body = c.def.effective_body(&self.gear);
+        let yaw = std::f32::consts::FRAC_PI_4 + self.time * 0.6;
+        let mut j = rig::solve(&c.anim.pose, &body, v3(0.0, 0.0, 0.0), yaw, c.gait.sway);
+        j.chest_bounce = c.chest_spring.x;
+        j.hair_sway = c.hair_sway();
+        let g = cam.project(v3(0.0, 0.0, 0.0));
+        fb.shadow_ellipse(g.x, g.y, 13.0, 6.0, C_SHADOW);
+        render::draw_character(&mut fb, &cam, &j, &c.def, &self.gear, &c.def.colors, &self.opts);
+        let (ox, oy) = (w as usize - pw * s - 40, 12usize);
+        rect(&mut self.fb, ox as i32 - 2, oy as i32 - 2, (pw * s) as i32 + 4, (ph * s) as i32 + 4, 0, shade(R_STONE, 5));
+        for y in 0..ph * s {
+            for x in 0..pw * s {
+                let (dx, dy) = (ox + x, oy + y);
+                if dx < self.fb.w && dy < self.fb.h {
+                    self.fb.color[dy * self.fb.w + dx] = fb.color[(y / s) * pw + x / s];
+                }
+            }
         }
     }
 

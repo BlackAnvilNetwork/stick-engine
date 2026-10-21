@@ -1,7 +1,7 @@
 //! Browser host: canvas 2D + putImageData, keyboard/mouse input, rAF loop.
 use std::cell::RefCell;
 use std::rc::Rc;
-use stick_engine::game::{hk_digit, Game, Input, HK_GEAR, HK_SEX, HK_UI};
+use stick_engine::game::*;
 use stick_engine::{HEIGHT, WIDTH};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
@@ -15,6 +15,15 @@ struct State {
 }
 
 fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
+    if down {
+        i.hotkeys |= match code {
+            "KeyW" | "ArrowUp" => HK_NAV_UP,
+            "KeyS" | "ArrowDown" => HK_NAV_DOWN,
+            "KeyA" | "ArrowLeft" => HK_NAV_LEFT,
+            "KeyD" | "ArrowRight" => HK_NAV_RIGHT,
+            _ => 0,
+        };
+    }
     match code {
         "KeyW" | "ArrowUp" => i.up = down,
         "KeyS" | "ArrowDown" => i.down = down,
@@ -28,9 +37,14 @@ fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
     true
 }
 
-/// Panel hotkeys (fire on key-down only): 1-9 actions, G sex, T gear, F1 panel.
+/// Panel hotkeys (fire on key-down only): 1-9 actions, G sex, T gear, F1
+/// panel, C customize, R random, X reset (save/load is native-only).
 fn hotkey(i: &mut Input, code: &str, down: bool) -> bool {
     let bit = match code {
+        "KeyC" => HK_CUSTOM,
+        "KeyR" => HK_RANDOM,
+        "KeyX" => HK_RESET,
+        "Enter" => HK_ENTER,
         "KeyG" => HK_SEX,
         "KeyT" => HK_GEAR,
         "F1" => HK_UI,

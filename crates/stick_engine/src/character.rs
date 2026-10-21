@@ -95,6 +95,8 @@ pub struct Character {
     idle_t: f32,
     /// Secondary motion for the chest cue.
     pub chest_spring: ChestSpring,
+    /// Hair sway springs on world x, y, z (only for styles that sway).
+    pub hair_spring: [ChestSpring; 3],
 }
 
 impl Character {
@@ -104,6 +106,7 @@ impl Character {
             swing_weight: 1.0, def, anim: Animator::new(), gait: Gait::default(), windows: Windows::default(),
             dash_dir: (1.0, 0.0), cooldowns: vec![0.0; actions.defs.len()], idle_t: 0.0,
             chest_spring: ChestSpring::default(),
+            hair_spring: [ChestSpring::default(); 3],
         };
         c.refresh_gear(gear);
         c
@@ -112,6 +115,14 @@ impl Character {
     /// Advance secondary motion from freshly solved joints (call once per
     /// tick after `step`). Chest armour damps the motion.
     pub fn update_secondary(&mut self, j: &crate::rig::Joints, gear: &GearLib, dt: f32) {
+        if self.def.body.hair.sways() {
+            let h = j.get(crate::rig::Joint::Head);
+            for (s, v) in self.hair_spring.iter_mut().zip([h.x, h.y, h.z]) {
+                s.step(v, dt, Self::HAIR_GAIN);
+            }
+        } else {
+            self.hair_spring = [ChestSpring::default(); 3];
+        }
         if self.def.body.chest <= 0.0 {
             self.chest_spring = ChestSpring::default();
             return;
@@ -119,6 +130,13 @@ impl Character {
         let armoured = self.def.equipped(crate::gear::GearSlot::Chest, gear).is_some();
         let gain = if armoured { 0.25 } else { 1.0 };
         self.chest_spring.step(j.get(crate::rig::Joint::Chest).y, dt, gain);
+    }
+    /// Hair spring drive relative to the chest spring.
+    pub const HAIR_GAIN: f32 = 1.6;
+    /// Current hair sway offset (world metres) for `Joints::hair_sway`.
+    pub fn hair_sway(&self) -> crate::math::Vec3 {
+        let [x, y, z] = self.hair_spring;
+        crate::math::v3(x.x, y.x, z.x)
     }
 
     /// Recompute stance and swing weight after the gear changed.

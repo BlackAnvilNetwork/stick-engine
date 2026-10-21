@@ -3,13 +3,17 @@
 //! colours, elemental tints and hit flashes are just different maps.
 use crate::raster::{shade, R_ARCANE, R_BLOOD, R_BONE, R_GOLD, R_STEEL, R_VOID, R_WHITE};
 use serde::Deserialize;
+use crate::raster::{R_HAIR_BROWN};
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ColorSlot {
     Body, BodyFar, Outline, Accent, Material, Trim, Glow,
+    /// Torso/outfit colour (defaults to the body ramp).
+    Outfit,
+    Hair,
 }
-pub const N_SLOTS: usize = 7;
+pub const N_SLOTS: usize = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RampMap {
@@ -20,7 +24,7 @@ pub struct RampMap {
 
 impl Default for RampMap {
     fn default() -> Self {
-        RampMap { ramps: [R_BONE, R_BONE, R_VOID, R_BLOOD, R_STEEL, R_GOLD, R_ARCANE], flash: false }
+        RampMap { ramps: [R_BONE, R_BONE, R_VOID, R_BLOOD, R_STEEL, R_GOLD, R_ARCANE, R_BONE, R_HAIR_BROWN], flash: false }
     }
 }
 
@@ -44,6 +48,10 @@ impl RampMap {
     }
     /// Elemental tint = body override.
     pub fn tint(self, ramp: u8) -> Self {
+        self.with(ColorSlot::Body, ramp).with(ColorSlot::BodyFar, ramp).with(ColorSlot::Outfit, ramp).with(ColorSlot::Hair, ramp)
+    }
+    /// Skin = body + far-body ramps.
+    pub fn skin(self, ramp: u8) -> Self {
         self.with(ColorSlot::Body, ramp).with(ColorSlot::BodyFar, ramp)
     }
     pub fn flashed(mut self) -> Self {

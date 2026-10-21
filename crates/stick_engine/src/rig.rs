@@ -78,6 +78,8 @@ pub struct Joints {
     /// Vertical secondary-motion offset (m) for the chest cue; `solve` leaves
     /// it 0, the owner of the spring state fills it in.
     pub chest_bounce: f32,
+    /// Hair secondary-motion offset (world m) applied to loose strand tips.
+    pub hair_sway: Vec3,
 }
 
 impl Joints {
@@ -154,7 +156,7 @@ pub fn solve(pose: &Pose, b: &BodyParams, pos: Vec3, yaw: f32, sway: f32) -> Joi
         let p = d(wp);
         wpn[i] = fs * p.cos() + up * p.sin();
     }
-    let mut j = Joints { p: pts, wpn_dir: wpn, fwd: f, right: r, chest_bounce: 0.0 };
+    let mut j = Joints { p: pts, wpn_dir: wpn, fwd: f, right: r, chest_bounce: 0.0, hair_sway: Vec3::default() };
 
     // Whole-body rotation (rolls, knockdowns) about the pelvis' right axis.
     let rp = pose.get(Ch::RootPitch);

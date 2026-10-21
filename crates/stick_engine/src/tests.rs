@@ -568,7 +568,7 @@ fn shape_presets_read_male_and_female() {
     assert!(f.hip_w > f.waist_w * 1.4 && f.shoulder_w / f.hip_w < m.shoulder_w / m.hip_w * 0.7);
     assert!(f.thigh_w > m.thigh_w && f.arm_thick < m.arm_thick && f.calf_thick < m.calf_thick);
     assert!(f.chest > 0.056 * 1.68 / 1.80);
-    assert_eq!((m.hair, f.hair), (HairStyle::None, HairStyle::Bob));
+    assert_eq!((m.hair, f.hair), (HairStyle::Buzz, HairStyle::Bob));
     // scaling keeps proportions
     let s = f.scaled(1.1);
     assert!((s.waist_w / s.hip_w - f.waist_w / f.hip_w).abs() < 1e-5);
@@ -628,4 +628,109 @@ fn female_hair_and_shape_draw_pixels() {
     g.run_cmd(crate::ui::UiCmd::ToggleSex);
     g.render();
     assert_ne!(male, g.fb.color);
+}
+
+// ---- hair styles + customization ----
+
+#[test]
+fn hair_menus_have_five_styles_each_and_bald() {
+    use crate::body::{HairStyle, ALL_HAIR, FEMALE_HAIR, MALE_HAIR};
+    assert!(ALL_HAIR.contains(&HairStyle::None));
+    for h in MALE_HAIR.iter().chain(FEMALE_HAIR.iter()) {
+        assert!(ALL_HAIR.contains(h) && *h != HairStyle::None);
+    }
+    // every style draws something on a bald head, from front, side and back
+    for (k, h) in ALL_HAIR.iter().enumerate().skip(1) {
+        for yaw in [0.785f32, 2.356, 3.927] {
+            let draw = |hair| {
+                let b = BodyParams { hair, ..BodyParams::preset(Sex::Female) };
+                let j = rig::solve(&Pose::default(), &b, v3(0.0, 0.0, 0.0), yaw, 0.0);
+                let mut fb = Framebuffer::new(120, 170);
+                let def = CharacterDef { body: b, ..CharacterDef::new(Sex::Female) };
+                crate::render::draw_character(&mut fb, &Camera::new(120, 170), &j, &def, &GearLib::builtin(),
+                    &RampMap::default(), &crate::render::DrawOpts::default());
+                fb.color
+            };
+            assert_ne!(draw(HairStyle::None), draw(*h), "style #{k} yaw {yaw}");
+        }
+    }
+}
+
+#[test]
+fn hair_sway_deterministic_bounded_and_only_for_loose_styles() {
+    use crate::body::HairStyle;
+    let run = |hair| {
+        let mut g = Game::new(640, 360);
+        g.custom.hair = hair;
+        g.apply_custom();
+        let mut i = Input { right: true, run: true, ..Default::default() };
+        let mut out = Vec::new();
+        for k in 0..200 {
+            if k == 120 { i = Input::default(); }
+            g.update(1.0 / 60.0, &mut i);
+            out.push(g.player_joints().hair_sway);
+        }
+        out
+    };
+    let a = run(HairStyle::Ponytail);
+    assert_eq!(a, run(HairStyle::Ponytail));
+    let peak = a.iter().fold(0.0f32, |m, v| m.max(v.x.abs()).max(v.y.abs()).max(v.z.abs()));
+    assert!(peak > 0.002 && peak <= ChestSpring::MAX + 1e-6, "{peak}");
+    assert!(run(HairStyle::Buzz).iter().all(|v| v.len() == 0.0));
+}
+
+#[test]
+fn customization_clamps_and_round_trips() {
+    use crate::body::HairStyle;
+    use crate::custom::*;
+    let wild = CharacterCustomization {
+        blend: 5.0, height: 0.1, shoulder: 9.0, waist: -1.0, hip: f32::NAN, chest: 3.0, thigh: 0.0, limb: 4.0,
+        skin: "nope".into(), ..CharacterCustomization::default()
+    };
+    let c = wild.clamped();
+    assert_eq!((c.blend, c.height, c.shoulder, c.waist, c.chest), (BLEND.1, HEIGHT.0, SHOULDER.1, WAIST.0, CHEST.1));
+    assert!(c.hip >= HIP.0 && c.hip <= HIP.1);
+    assert_eq!((c.thigh, c.limb, c.skin.as_str()), (THIGH.0, LIMB.1, "bone"));
+    // serde round trip (and loading clamps hand-edited values)
+    let r = CharacterCustomization { hair: HairStyle::Mohawk, hair_color: "hair_red".into(), ..CharacterCustomization::random(3) };
+    assert_eq!(CharacterCustomization::from_ron(&r.to_ron()).unwrap(), r.clamped());
+    let edited = r.to_ron().replace(&format!("shoulder: {:?}", r.shoulder), "shoulder: 40.0");
+    assert_eq!(CharacterCustomization::from_ron(&edited).unwrap().shoulder, SHOULDER.1);
+    // partial files fill defaults
+    let p = CharacterCustomization::from_ron("(sex: Female, hair: Pixie)").unwrap();
+    assert_eq!((p.sex, p.hair, p.height), (Sex::Female, HairStyle::Pixie, 1.0));
+    // neutral settings reproduce the preset exactly
+    for s in [Sex::Male, Sex::Female] {
+        assert_eq!(CharacterCustomization::for_sex(s).body(), BodyParams::preset(s));
+    }
+    assert_eq!(CharacterCustomization::random(11), CharacterCustomization::random(11));
+}
+
+#[test]
+fn customization_is_cosmetic_and_screen_navigates() {
+    use crate::game::*;
+    let mut g = Game::new(640, 360);
+    let gear_before = (g.player.def.gear, g.player.stance.clone(), g.player.swing_weight);
+    let mut i = Input { hotkeys: HK_CUSTOM, ..Default::default() };
+    g.update(1.0 / 60.0, &mut i);
+    assert!(g.customize.is_some());
+    // move down to SHOULDERS (row 3) and widen; screen open blocks movement
+    for hk in [HK_NAV_DOWN, HK_NAV_DOWN, HK_NAV_DOWN, HK_NAV_RIGHT, HK_NAV_RIGHT] {
+        let mut i = Input { hotkeys: hk, right: true, ..Default::default() };
+        g.update(1.0 / 60.0, &mut i);
+    }
+    assert!((g.custom.shoulder - 1.1).abs() < 1e-4);
+    assert_eq!(g.player.pos, v3(0.0, 0.0, 0.0));
+    let mut i = Input { hotkeys: HK_RANDOM | HK_SAVE, ..Default::default() };
+    g.update(1.0 / 60.0, &mut i);
+    let saved = g.save_request.take().expect("save request");
+    assert_eq!(gear_before, (g.player.def.gear, g.player.stance.clone(), g.player.swing_weight));
+    g.render();
+    let mut h = Game::new(640, 360);
+    h.load_customization(&saved).unwrap();
+    assert_eq!(h.player.def.body, g.player.def.body);
+    assert_eq!(h.player.def.colors, g.player.def.colors);
+    let mut i = Input { hotkeys: HK_CUSTOM, ..Default::default() };
+    g.update(1.0 / 60.0, &mut i);
+    assert!(g.customize.is_none());
 }

@@ -6,10 +6,10 @@ use crate::gear::{derive_stance, GearLib, GearSlot, ALL_GEAR_SLOTS, N_GEAR_SLOTS
 use crate::math::Pcg32;
 use crate::raster::ramp_id;
 use crate::rig::N_BONES;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Sex {
     Male,
     Female,
@@ -36,13 +36,55 @@ impl Sex {
     }
 }
 
-/// Cosmetic hair silhouette drawn on the head (body ramp, one shade darker).
-#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// Cosmetic hair silhouette drawn on the head in the `Hair` colour slot.
+/// `None` = bald. Any style works on any body; the `MALE_HAIR` /
+/// `FEMALE_HAIR` lists are just the default menus.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum HairStyle {
     #[default]
     None,
+    Buzz,
+    Spiky,
+    SlickedBack,
+    Mohawk,
+    Topknot,
     Bob,
     Ponytail,
+    LongStraight,
+    Pigtails,
+    Pixie,
+}
+
+pub const MALE_HAIR: [HairStyle; 5] =
+    [HairStyle::Buzz, HairStyle::Spiky, HairStyle::SlickedBack, HairStyle::Mohawk, HairStyle::Topknot];
+pub const FEMALE_HAIR: [HairStyle; 5] =
+    [HairStyle::Bob, HairStyle::Ponytail, HairStyle::LongStraight, HairStyle::Pigtails, HairStyle::Pixie];
+pub const ALL_HAIR: [HairStyle; 11] = [
+    HairStyle::None, HairStyle::Buzz, HairStyle::Spiky, HairStyle::SlickedBack, HairStyle::Mohawk,
+    HairStyle::Topknot, HairStyle::Bob, HairStyle::Ponytail, HairStyle::LongStraight, HairStyle::Pigtails,
+    HairStyle::Pixie,
+];
+
+impl HairStyle {
+    /// Styles with loose strands that get spring sway.
+    pub fn sways(self) -> bool {
+        matches!(self, HairStyle::Ponytail | HairStyle::LongStraight | HairStyle::Topknot)
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            HairStyle::None => "BALD",
+            HairStyle::Buzz => "BUZZ",
+            HairStyle::Spiky => "SPIKY",
+            HairStyle::SlickedBack => "SLICKED BACK",
+            HairStyle::Mohawk => "MOHAWK",
+            HairStyle::Topknot => "TOPKNOT",
+            HairStyle::Bob => "BOB",
+            HairStyle::Ponytail => "PONYTAIL",
+            HairStyle::LongStraight => "LONG STRAIGHT",
+            HairStyle::Pigtails => "TWIN BUNS",
+            HairStyle::Pixie => "PIXIE",
+        }
+    }
 }
 
 /// Body proportions in metres. Widths are FULL widths (the rig uses half).
@@ -91,7 +133,7 @@ impl BodyParams {
             bone_thickness_mul: [1.0; N_BONES], chest: 0.0,
             // V-taper: broad shoulders, narrow waist and hips, heavier limbs
             waist_w: 0.22, torso_depth: 0.21, thigh_w: 1.2, arm_thick: 1.15, calf_thick: 1.05,
-            hair: HairStyle::None,
+            hair: HairStyle::Buzz,
         };
         let m = BodyParams { shoulder_w: 0.46, ..m };
         let b = match sex {

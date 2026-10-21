@@ -47,6 +47,10 @@ fn glyph(c: char) -> [&'static str; 5] {
         '_' => ["...", "...", "...", "...", "###"],
         ':' => ["...", ".#.", "...", ".#.", "..."],
         '/' => ["..#", "..#", ".#.", "#..", "#.."],
+        '.' => ["...", "...", "...", "...", ".#."],
+        '<' => ["..#", ".#.", "#..", ".#.", "..#"],
+        '>' => ["#..", ".#.", "..#", ".#.", "#.."],
+        '%' => ["#.#", "..#", ".#.", "#..", "#.#"],
         '[' => ["##.", "#..", "#..", "#..", "##."],
         ']' => [".##", "..#", "..#", "..#", ".##"],
         _ => ["...", "...", "...", "...", "..."],
@@ -77,7 +81,7 @@ fn put(fb: &mut Framebuffer, x: i32, y: i32, c: u8) {
     }
 }
 
-fn rect(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, fill: u8, border: u8) {
+pub fn rect(fb: &mut Framebuffer, x: i32, y: i32, w: i32, h: i32, fill: u8, border: u8) {
     for yy in y..y + h {
         for xx in x..x + w {
             let edge = yy == y || yy == y + h - 1 || xx == x || xx == x + w - 1;
@@ -94,6 +98,8 @@ pub enum UiCmd {
     ToggleSex,
     CycleGear,
     TogglePanel,
+    /// Open/close the character customization screen.
+    Customize,
 }
 
 #[derive(Clone, Debug)]

@@ -24,8 +24,7 @@ const SHADE_FAR: u8 = 3;
 
 /// Draw the bare body (no gear).
 pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, map: &RampMap, o: &DrawOpts) {
-    let near = map.color(ColorSlot::Body, SHADE_NEAR);
-    draw_body_with(fb, cam, j, b, map, o, near);
+    draw_body_with(fb, cam, j, b, map, o, map.color(ColorSlot::Outfit, SHADE_NEAR));
 }
 
 /// Approximate px per metre across the body (iso horizontal ~32-45).
@@ -93,10 +92,13 @@ fn draw_body_with(
     let near = map.color(ColorSlot::Body, SHADE_NEAR);
     let far = map.color(ColorSlot::BodyFar, SHADE_FAR);
     let r = |bone: Bone| b.limb_radius(bone);
-    // far side (left) limbs slightly darker for depth readability
+    // the side farther from the camera is slightly darker for depth
+    // readability (picked by facing, so profiles shade the right limbs)
+    let left_far = p(Joint::LShoulder).d + p(Joint::LHip).d >= p(Joint::RShoulder).d + p(Joint::RHip).d;
+    let (lc, rc) = if left_far { (far, near) } else { (near, far) };
     for (bones, c) in [
-        ([Bone::LThigh, Bone::LShin, Bone::LUpperArm, Bone::LForearm], far),
-        ([Bone::RThigh, Bone::RShin, Bone::RUpperArm, Bone::RForearm], near),
+        ([Bone::LThigh, Bone::LShin, Bone::LUpperArm, Bone::LForearm], lc),
+        ([Bone::RThigh, Bone::RShin, Bone::RUpperArm, Bone::RForearm], rc),
     ] {
         let (h, k) = bones[0].ends();
         let (_, f) = bones[1].ends();
@@ -118,38 +120,98 @@ fn draw_body_with(
     fb.disc(p(Joint::Neck), b.limb_px + 0.4, map.color(ColorSlot::Accent, 3), None);
     let hr = b.head_r * HEIGHT_PX * b.bone_thickness_mul[Bone::Head as usize];
     fb.disc(p(Joint::Head), hr, near, ol);
-    draw_hair(fb, cam, j, b, map.color(ColorSlot::Body, SHADE_NEAR - 2), ol);
+    draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), ol);
 }
 
-/// Hair silhouette. Placed slightly behind the head centre so depth testing
-/// puts the face in front when facing the camera and the hair in front from
-/// behind; in profile it shows as a bulge at the back of the head.
+/// Hair silhouette in the `Hair` slot. Each part is depth-tested at its own
+/// 3D position, biased behind the face unless the figure faces away, so the
+/// face wins from the front, the hair wins from behind and in profile the
+/// parts show past the head outline. Loose strand tips follow `hair_sway`.
 fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: u8, ol: Option<u8>) {
+    use crate::body::HairStyle as H;
     use crate::math::Vec3;
     let hm = b.head_r * b.bone_thickness_mul[Bone::Head as usize];
     let h = j.get(Joint::Head);
     let up = (h - j.get(Joint::Neck)).norm();
-    let f = j.fwd;
+    let (f, r) = (j.fwd, j.right);
     let px = |m: f32| m * HEIGHT_PX;
-    // hair sits behind the face unless the figure faces away from the camera
     let away = j.fwd.x * TO_CAM.0 + j.fwd.z * TO_CAM.1 < -0.3;
-    let hd = cam.project(h).d + if away { -0.03 } else { 0.03 };
-    let at = |v: Vec3| P2 { d: hd, ..cam.project(v) };
+    let bias = if away { -0.03 } else { 0.03 };
+    // head-local point: (up, fwd, right) in head radii
+    let q = |u: f32, fw: f32, rt: f32| h + up * (u * hm) + f * (fw * hm) + r * (rt * hm);
+    let at = |v: Vec3, extra: f32| {
+        let p = cam.project(v);
+        P2 { d: p.d + bias + extra, ..p }
+    };
+    let sway = j.hair_sway * 1.5;
+    let disc = |fb: &mut Framebuffer, v: Vec3, rad: f32| fb.disc(at(v, 0.0), px(hm * rad), c, ol);
+    let spike = |fb: &mut Framebuffer, a: Vec3, z: Vec3, ra: f32, rz: f32| {
+        fb.cone(at(a, 0.0), at(z, 0.0), px(hm * ra), px(hm * rz), c, ol)
+    };
+    let strand = |fb: &mut Framebuffer, a: Vec3, z: Vec3, ra: f32, rz: f32| {
+        // long strands hang beside the neck: in front of the torso's centre plane
+        let e = if away { 0.0 } else { -0.03 };
+        fb.cone(at(a, e), at(z, e), px(hm * ra), px(hm * rz), c, ol)
+    };
     match b.hair {
-        crate::body::HairStyle::None => {}
-        crate::body::HairStyle::Bob => {
-            // crown cap + a fuller lower shell down to the jaw
-            fb.disc(at(h - f * (hm * 0.3) + up * (hm * 0.12)), px(hm * 1.05), c, ol);
-            for s in [-1.0f32, 1.0] {
-                let q = h - f * (hm * 0.35) - up * (hm * 0.45) + j.right * (s * hm * 0.55);
-                fb.disc(at(q), px(hm * 0.6), c, ol);
+        H::None => {}
+        H::Buzz => disc(fb, q(0.32, -0.15, 0.0), 0.95),
+        H::Spiky => {
+            disc(fb, q(0.3, -0.15, 0.0), 0.97);
+            for s in [-0.6f32, -0.2, 0.2, 0.6] {
+                spike(fb, q(0.7, -0.1, s * 0.8), q(1.3, -0.1, s * 1.5), 0.3, 0.06);
+            }
+            spike(fb, q(0.5, -0.6, 0.0), q(0.8, -1.2, 0.0), 0.3, 0.06);
+        }
+        H::SlickedBack => {
+            disc(fb, q(0.28, -0.35, 0.0), 1.0);
+            disc(fb, q(-0.25, -0.75, 0.0), 0.5);
+        }
+        H::Mohawk => {
+            for k in 0..8 {
+                let a = (30.0 - k as f32 * 21.0).to_radians();
+                disc(fb, h + (up * a.cos() + f * a.sin()) * (hm * 1.08), 0.27);
             }
         }
-        crate::body::HairStyle::Ponytail => {
-            fb.disc(at(h - f * (hm * 0.3) + up * (hm * 0.15)), px(hm * 1.0), c, ol);
-            let a = h - f * (hm * 1.0) + up * (hm * 0.2);
-            let z = a - f * (hm * 0.5) - Vec3::UP * (hm * 1.6);
-            fb.cone(at(a), at(z), px(hm * 0.38), px(hm * 0.18), c, ol);
+        H::Topknot => {
+            disc(fb, q(0.3, -0.15, 0.0), 0.96);
+            let bun = q(1.05, -0.25, 0.0);
+            disc(fb, bun, 0.42);
+            spike(fb, bun, bun - f * (hm * 0.45) - up * (hm * 0.7) + sway, 0.2, 0.08);
+        }
+        H::Bob => {
+            disc(fb, q(0.12, -0.3, 0.0), 1.05);
+            for s in [-1.0f32, 1.0] {
+                disc(fb, q(-0.4, -0.55, s * 0.55), 0.6);
+            }
+        }
+        H::Ponytail => {
+            disc(fb, q(0.15, -0.3, 0.0), 1.0);
+            let a = q(0.2, -1.0, 0.0);
+            let z = a - f * (hm * 0.5) - Vec3::UP * (hm * 1.6) + sway;
+            strand(fb, a, z, 0.38, 0.18);
+        }
+        H::LongStraight => {
+            disc(fb, q(0.12, -0.25, 0.0), 1.06);
+            for s in [-1.0f32, 1.0] {
+                let a = q(-0.1, -0.25, s * 0.7);
+                strand(fb, a, a - up * (hm * 2.3) + r * (s * hm * 0.15) - f * (hm * 0.1) + sway, 0.5, 0.4);
+            }
+            let a = q(0.0, -0.55, 0.0);
+            strand(fb, a, a - up * (hm * 2.5) - f * (hm * 0.2) + sway, 0.75, 0.6);
+        }
+        H::Pigtails => {
+            disc(fb, q(0.12, -0.2, 0.0), 1.03);
+            for s in [-1.0f32, 1.0] {
+                disc(fb, q(0.75, -0.3, s * 0.8), 0.42);
+            }
+        }
+        H::Pixie => {
+            disc(fb, q(0.15, -0.2, 0.0), 1.04);
+            disc(fb, q(-0.35, -0.6, 0.0), 0.45);
+            // side-swept fringe drawn over the forehead
+            let fr = q(0.78, 0.35, 0.3);
+            fb.disc(at(fr, if away { 0.0 } else { -0.08 }), px(hm * 0.42), c, ol);
         }
     }
 }
@@ -199,9 +261,9 @@ pub fn draw_character(
     let cols = match def.equipped(crate::gear::GearSlot::Chest, gear) {
         Some(g) => match g.material {
             Some(r) => { let m = map.with(ColorSlot::Material, r); (m.color(ColorSlot::Material, 3), m.color(ColorSlot::Material, 2)) }
-            None => (map.color(ColorSlot::Body, SHADE_NEAR), map.color(ColorSlot::Body, SHADE_NEAR - 1)),
+            None => (map.color(ColorSlot::Outfit, SHADE_NEAR), map.color(ColorSlot::Outfit, SHADE_NEAR - 1)),
         },
-        None => (map.color(ColorSlot::Body, SHADE_NEAR), map.color(ColorSlot::Body, SHADE_NEAR - 1)),
+        None => (map.color(ColorSlot::Outfit, SHADE_NEAR), map.color(ColorSlot::Outfit, SHADE_NEAR - 1)),
     };
     draw_body_with(fb, cam, j, &b, map, o, cols.0);
     draw_chest(fb, cam, j, &b, cols, ol);

@@ -86,6 +86,30 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
         let e = if away { 0.0 } else { -0.03 };
         fb.cone(at(a, e), at(z, e), px(hm * ra), px(hm * rz), c, ol)
     };
+    // Thin base layer in the hair colour over the natural scalp (crown,
+    // top, sides above the ears, back of the head; never the face), drawn
+    // first so every style layers on top and no skin patches show. Each
+    // sample sits on the head sphere at its true depth, so the far side of
+    // the scalp stays hidden behind the head and the near side covers it.
+    if !matches!(b.hair, H::None | H::Mohawk) {
+        for ei in 0..7 {
+            let el = (-35.0 + ei as f32 * 20.0).to_radians(); // -35..85 deg
+            let n_az = 12;
+            for ai in 0..n_az {
+                let az = ai as f32 * std::f32::consts::TAU / n_az as f32;
+                let (u, fw, rt) = (el.sin(), el.cos() * az.cos(), el.cos() * az.sin());
+                // hairline: forehead above u 0.55, temples above u 0.1,
+                // sides/back down to the nape
+                let min_u = if fw > 0.55 { 0.55 } else if fw > 0.0 { 0.25 } else if fw > -0.5 { 0.05 } else { -0.5 };
+                if u < min_u {
+                    continue;
+                }
+                let v = q(u * 0.97, fw * 0.97, rt * 0.97);
+                let p = cam.project(v);
+                fb.disc(P2 { d: p.d - 0.005, ..p }, px(hm * 0.3), c, None);
+            }
+        }
+    }
     match b.hair {
         H::None => {}
         H::Buzz => disc(fb, q(0.32, -0.15, 0.0), 0.95),

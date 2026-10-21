@@ -261,7 +261,7 @@ Capsules (distance-to-segment, span version planned), discs, Bresenham lines, sh
 
 ## 7. Camera modes
 - **Iso 2.5D**: 2:1 dimetric, ground picking (`unproject_ground`).
-- **3D perspective** (planned): the same joints and capsules, radius scaled by 1/z, with an ortho→persp dolly-zoom transition. Gameplay stays on the ground plane.
+- **3D perspective** ✅ (`camera::View`, `camrig::CamRig`): third-person and first-person modes using the same joints and capsules, radius scaled by 1/z, near-plane culling, view-z depth sort, ground homography floor. Iso↔3D is an ortho→persp dolly-zoom; TP↔FP an eased boom. Gameplay stays on the ground plane; movement is camera-relative in 3D.
 
 ## 8. World
 1 m tile grid with height and material, procedurally generated and drawn (today: procedural iso floor). Planned: dungeon generator, static terrain cache, navgrid.
@@ -313,7 +313,7 @@ Techniques: index-addressed channels/joints (no strings on hot paths), SoA, span
 - **M3** iso world + click-to-move: dungeon gen, terrain cache, A*, foot IK. Accept: 200 NPCs at 60 fps (web).
 - **M4** combat helpers: flow-field crowds, hit tests from clip windows + weapon reach, hit-stop/flash/shake, particles, ragdoll. Accept: 500 chasing enemies at 60 fps (web).
 - **M5** performance & polish: LOD, span raster, SIMD, WebGL2 blit, dither/fog, pose editor v1. Accept: 1000+ characters at 60 fps (web).
-- **M6** 3D mode (optional view).
+- **M6** 3D mode (optional view) ✅ third-person + first-person cameras, `V` to cycle. *Remaining:* sky/horizon shading, FOV config independent of `tp_distance`.
 
 ## 14. Risks
 | Risk | Mitigation |

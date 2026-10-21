@@ -11,7 +11,17 @@ Characters are **procedurally drawn stick people** with no sprites and no 3D mod
 | Run | hold **Shift** while moving |
 | Dash | **Space** (dashes in the move direction, or facing; 0.45 s cooldown) |
 | Sword swing | **Left click** (aims at cursor) or **J** |
+| Cycle camera (iso → third-person → first-person) | **V** |
+| Look yaw / pitch (3D modes) | **Q / E** / **R / F** |
 | Quit (native) | Esc |
+
+### Camera modes
+
+- **Iso** (default): the original 2:1 dimetric view, byte-identical to earlier output.
+- **Third-person**: behind and above the character, pitched 30° down, smoothed, `tp_distance` 6 m.
+- **First-person**: eye at the head; head and body are hidden, forearms and held gear are drawn; pitch clamped to ±60°.
+
+Iso ↔ 3D uses an ortho→perspective dolly-zoom; TP ↔ FP is an eased boom move (`blend_s` 0.7 s). In 3D modes WASD is camera-relative, and click-to-move/aim pick the ground in every mode. Configure via `CamConfig` (`Game::set_cam_config`), `--cam iso|tp|fp` or `STICK_CAM` natively, or `#cam=tp` on the web. `cargo run --release -p stick_engine --example camshots -- out/` renders each mode and prints per-mode frame cost.
 
 Add `#demo` to the web URL (or `--demo` natively) for a scripted autoplay. `#demo&t=4.7` fast-forwards to a moment.
 

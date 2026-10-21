@@ -15,6 +15,7 @@ pub mod actions;
 pub mod anim;
 pub mod body;
 pub mod camera;
+pub mod camrig;
 pub mod character;
 pub mod color;
 pub mod custom;

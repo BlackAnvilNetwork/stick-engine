@@ -29,6 +29,11 @@ fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
         "KeyJ" => i.attack = down,
         "KeyH" => i.hair_style = down,
         "KeyK" => i.hair_color = down,
+        "KeyV" => i.cam_cycle = down,
+        "KeyQ" => i.look_left = down,
+        "KeyE" => i.look_right = down,
+        "KeyR" => i.look_up = down,
+        "KeyF" => i.look_down = down,
         _ => return false,
     }
     true
@@ -46,6 +51,10 @@ pub fn start() -> Result<(), JsValue> {
     let mut game = Game::new(WIDTH, HEIGHT);
     let hash = win.location().hash().unwrap_or_default();
     game.demo = hash.contains("demo");
+    // `#cam=tp` / `#cam=fp` / `#cam=iso` sets the starting camera mode.
+    if let Some(m) = hash.split("cam=").nth(1).and_then(|v| stick_engine::camrig::CamMode::parse(v.split('&').next()?)) {
+        game.set_cam_config(stick_engine::camrig::CamConfig { mode: m, ..game.rig.cfg });
+    }
     // `#demo&t=3.5` fast-forwards the scripted demo (used for screenshots).
     if let Some(t) = hash.split("t=").nth(1).and_then(|v| v.split('&').next()?.parse::<f32>().ok()) {
         let mut i = Input::default();

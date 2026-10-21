@@ -69,6 +69,11 @@ impl ApplicationHandler for App {
                         KeyCode::KeyJ => i.attack = down,
                         KeyCode::KeyH => i.hair_style = down,
                         KeyCode::KeyK => i.hair_color = down,
+                        KeyCode::KeyV => i.cam_cycle = down,
+                        KeyCode::KeyQ => i.look_left = down,
+                        KeyCode::KeyE => i.look_right = down,
+                        KeyCode::KeyR => i.look_up = down,
+                        KeyCode::KeyF => i.look_down = down,
                         KeyCode::Escape => el.exit(),
                         _ => {}
                     }
@@ -137,7 +142,13 @@ impl ApplicationHandler for App {
 fn main() {
     let el = EventLoop::new().expect("event loop");
     let mut game = Game::new(WIDTH, HEIGHT);
-    game.demo = std::env::args().any(|a| a == "--demo");
+    let args: Vec<String> = std::env::args().collect();
+    game.demo = args.iter().any(|a| a == "--demo");
+    // `--cam tp|fp|iso` (or STICK_CAM) sets the starting camera mode.
+    let cam = args.iter().position(|a| a == "--cam").and_then(|i| args.get(i + 1).cloned()).or_else(|| std::env::var("STICK_CAM").ok());
+    if let Some(m) = cam.as_deref().and_then(stick_engine::camrig::CamMode::parse) {
+        game.set_cam_config(stick_engine::camrig::CamConfig { mode: m, ..game.rig.cfg });
+    }
     let mut app = App { gfx: None, game, input: Input::default(), last: Instant::now(), cursor: (0.0, 0.0), view: (2, 0, 0), right_down: false };
     el.run_app(&mut app).expect("run");
 }

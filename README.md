@@ -106,3 +106,7 @@ To tweak an existing move, just edit its `.ron` and rebuild. `AnimLibrary::regis
 - [ ] Add a dated "modified" notice when changing files that came from someone else.
 - [ ] Keep `license = "AGPL-3.0-or-later"` in every `Cargo.toml`.
 - [ ] When deploying a modified build (server, hosted web page, release binary), publish or link the matching source.
+
+## Trademarks
+
+Stick Engine™ and its logo are trademarks of Black Anvil Network. The code license does not grant rights to use them. Forks and modified versions must use their own name and logo. See [TRADEMARK.md](TRADEMARK.md).

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Gear: shape primitives attached to a joint, in joint-local metres.
 //! Looks only (plus animation timing: `reach`, `swing_weight`); stats are a
 //! game concern.

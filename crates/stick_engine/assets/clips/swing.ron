@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 // Swing: wind-up over the right shoulder, horizontal slash across the body,
 // follow-through, recover. hit_start/hit_end mark the active frames;
 // cancel_open/cancel_close let another action interrupt the recovery.

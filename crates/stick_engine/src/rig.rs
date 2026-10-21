@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Stick-figure rig: skeleton definition and forward kinematics from a
 //! [`Pose`] into 3D joints. Pure maths: no raster, camera or platform code,
 //! so it runs headless (tools, tests, servers). Drawing lives in `render`.

@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Browser host: canvas 2D + putImageData, keyboard/mouse input, rAF loop.
 use std::cell::RefCell;
 use std::rc::Rc;

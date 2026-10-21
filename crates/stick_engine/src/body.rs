@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Character definition: body proportions, sex presets, personality, colour
 //! slots and equipped gear, plus deterministic generation from
 //! `(seed, archetype)`. Pure data: no rendering.

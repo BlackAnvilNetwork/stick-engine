@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Character drawing: projects FK joints through a camera and rasterises
 //! limbs, head and gear shapes, resolving colour slots via a `RampMap`.
 use crate::body::{BodyParams, CharacterDef};

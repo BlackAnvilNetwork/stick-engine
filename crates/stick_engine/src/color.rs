@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Colour slots. Bodies and gear never store palette indices: they name a
 //! [`ColorSlot`], and a per-draw [`RampMap`] resolves slot -> ramp. Team
 //! colours, elemental tints and hit flashes are just different maps.

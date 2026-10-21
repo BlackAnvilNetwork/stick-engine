@@ -93,6 +93,33 @@ index.html, Trunk.toml        web shell
 4. **Trigger** it with `Intent { request: actions.id("kick"), .. }`. The demo binds keys in `game.rs` and the hosts.
 5. Run `cargo test` (it checks every action's clips exist), then `trunk serve`.
 
-## License
+## License (AGPL-3.0): what developers and agents must do
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+**Stick Engine, Copyright (C) 2026 Black Anvil Network.** Licensed under the GNU Affero General Public License, version 3 or (at your option) any later version (`AGPL-3.0-or-later`). See [LICENSE](LICENSE).
+
+*This is a plain-language summary, not legal advice. The LICENSE text governs; ask a lawyer for your specific case.*
+
+### If you use the engine in a game or app
+- **Linking counts.** A game, tool or app that links to or compiles in Stick Engine (crate dependency, static or wasm build) is a derivative work and, when distributed or offered over a network, must be licensed under AGPL-3.0 (or a compatible license) as a whole.
+- **Network use counts.** If you run a modified version (for example a game server or a hosted web build using a modified engine) for users over a network, you must offer those users its complete corresponding source, e.g. with a "Source" link (AGPL §13).
+- **Shipping binaries means shipping source.** Native executables and **wasm/JS builds served to browsers** are conveying: provide the complete corresponding source (Rust sources, build scripts, `Cargo.toml`/`Cargo.lock`, wasm-bindgen glue) with them or via a written offer (AGPL §6).
+
+### Always
+- **Keep the notices (AGPL §5).** Don't remove or alter copyright lines, license notices or warranty disclaimers. Every source file starts with a `Copyright (c) 2026 Black Anvil Network` / `SPDX-License-Identifier: AGPL-3.0-or-later` header; keep it (and any third-party notice) and add it to new files with `node scripts/add-license-headers.mjs` (CI checks with `--check`).
+- **Mark modified files** with a prominent notice saying what you changed and when (AGPL §5a).
+- **Derivatives stay AGPL.** You can't relicense modified versions as proprietary.
+- **No extra restrictions** beyond the license (AGPL §10, §12).
+- **Patent grant.** Contributors license any patents needed to use their contributions (AGPL §11).
+- **Third-party assets and code** (fonts, sprites, sounds, models, snippets) need licenses compatible with AGPL-3.0 that allow commercial use (e.g. CC0, CC-BY 4.0, MIT, BSD, Apache-2.0). No NC, ND or unknown-license material; record where each came from.
+
+### Checklist for AI agents (and humans)
+- [ ] Keep every existing copyright and license header.
+- [ ] Don't paste code whose license you can't confirm is AGPL-3.0-compatible.
+- [ ] Record the source URL, author and license of every third-party asset or snippet you add.
+- [ ] Add a dated "modified" notice when changing files that came from someone else.
+- [ ] Keep `license = "AGPL-3.0-or-later"` in every `Cargo.toml`.
+- [ ] When deploying a modified build (server, hosted web page, release binary), publish or link the matching source.
+
+## Trademarks
+
+Stick Engine™ and its logo are trademarks of Black Anvil Network. The code license does not grant rights to use them. Forks and modified versions must use their own name and logo. See [TRADEMARK.md](TRADEMARK.md).

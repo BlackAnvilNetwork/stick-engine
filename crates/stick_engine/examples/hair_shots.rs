@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Renders every hair style in two colours into a PPM contact sheet:
 //! `cargo run -p stick_engine --example hair_shots -- out.ppm`
 use stick_engine::body::ALL_HAIR;

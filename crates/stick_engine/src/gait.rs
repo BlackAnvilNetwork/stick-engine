@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Procedural locomotion: walk/run cycles generated from ground speed and
 //! leg length (no walk/run clips). Output is an ordinary `Pose` used as the
 //! animator's base layer.

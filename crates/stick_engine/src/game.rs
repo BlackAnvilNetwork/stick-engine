@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Minimal playable scene: one stick hero on a procedural tile floor.
 use crate::actions::ActionTable;
 use crate::anim::AnimLibrary;

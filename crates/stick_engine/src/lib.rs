@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Stick Engine core: math, CPU pixel raster with ramp palettes, headless
 //! stick rig (FK), character definitions, gear, data-driven animation and
 //! actions, procedural gait, drawing, and a tiny demo game loop. Platform

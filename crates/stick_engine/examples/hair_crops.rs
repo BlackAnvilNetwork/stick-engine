@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Head crops of every hair style at 4 facings + a run frame: `-- out.ppm`
 use stick_engine::body::ALL_HAIR;
 use stick_engine::custom::HairOptions;

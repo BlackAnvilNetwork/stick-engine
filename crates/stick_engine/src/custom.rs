@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Player-facing hair options: a small serializable record (RON) of hair
 //! style and hair colour applied onto a [`CharacterDef`]. Purely cosmetic.
 use crate::body::{CharacterDef, HairStyle, ALL_HAIR};

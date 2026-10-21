@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 // Example one-handed sword (demo/test content). Shapes are in the hand frame:
 // +y runs along the blade (r_wpn_yaw/pitch), units are metres.
 (

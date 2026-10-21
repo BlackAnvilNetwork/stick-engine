@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Data-driven action table (`assets/actions.ron`), replacing the old
 //! `enum Action` + `ACTIONS` const table.
 use serde::Deserialize;

@@ -80,6 +80,31 @@ index.html, Trunk.toml web shell
 For a new **locomotion** style (e.g. sneak), use `Mode::Loop { ref_speed: <m/s> }` and choose it where Walk/Run are chosen.
 To tweak an existing move, just edit its `.ron` and rebuild. `AnimLibrary::register_ron` also accepts clips at runtime, ready for hot-reload or a future pose editor.
 
-## License
+## License (GPL-3.0): what developers and agents must do
 
-GPL-3.0-or-later. See [LICENSE](LICENSE).
+**Stick Engine, Copyright (C) 2026 Black Anvil Network.** Licensed under the
+GNU General Public License, version 3 or (at your option) any later version
+(`GPL-3.0-or-later`). The full text and copyright notice are in [LICENSE](LICENSE).
+
+*This is a plain-language summary, not legal advice. The LICENSE text governs; ask a lawyer for your specific case.*
+
+### If you use the engine in a game or app
+- **Linking counts.** A game, tool or app that links to or compiles in Stick Engine (a crate dependency, a static or wasm build) is a derivative work. If you distribute it, the whole work must be under GPL-3.0 (or a compatible license) as a whole.
+- **Shipping binaries means shipping source.** Native executables, libraries and **wasm/JS builds served to browsers** are all "conveying". With them, provide the complete corresponding source code: Rust sources, build scripts, `Cargo.toml`/`Cargo.lock`, wasm-bindgen glue and anything else needed to rebuild. Provide it alongside the binary or with a written offer (GPL-3.0 §6). A link to a public repo at the matching commit is the usual way to do it.
+- **Server-only use is not covered.** Running the engine only on your own server, with no copy given to users, does not trigger the source requirement under GPL-3.0. AGPL works differently. Once the client (wasm/JS) is sent to a browser, it *is* conveyed.
+
+### Always
+- **Keep the notices.** Don't remove or alter copyright lines, license notices or warranty disclaimers in LICENSE or in source files.
+- **Mark modified files.** Add a prominent notice to each file you change, saying that you modified it and when (e.g. `// Modified 2026-10-21 by <name>: <what>`). GPL-3.0 §5(a).
+- **License derivatives under GPL-3.0.** Your modified versions must be under the same license; you can't relicense them as proprietary.
+- **No extra restrictions.** Don't add terms, DRM or contracts that limit the rights the GPL grants. GPL-3.0 §10 and §12.
+- **Patent grant.** Contributors grant users a license to any of their patents needed to use their contributions, and may not sue over it. GPL-3.0 §11.
+- **Third-party assets and code** (fonts, sprites, sounds, models, snippets) must have licenses compatible with GPL-3.0 that also allow commercial use (e.g. CC0, CC-BY 4.0, MIT, BSD, Apache-2.0). Avoid "non-commercial" (CC-BY-NC), "no derivatives" (ND) and unknown-license material. Record where each asset came from and under which license.
+
+### Checklist for AI agents (and humans)
+- [ ] Keep every existing copyright and license header; add one to new source files where the project uses them.
+- [ ] Don't paste code from sources whose license you can't confirm is GPL-3.0-compatible (no proprietary, NC, ND or unlicensed code).
+- [ ] Record the source URL, author and license of every third-party asset or snippet you add (in the PR description or an asset credits file).
+- [ ] Add a "modified" notice with the date when changing files that came from someone else.
+- [ ] Keep the `license = "GPL-3.0-or-later"` fields in every `Cargo.toml` consistent.
+- [ ] When publishing a build (release binary, wasm, hosted web page), make sure the matching source is published or offered.

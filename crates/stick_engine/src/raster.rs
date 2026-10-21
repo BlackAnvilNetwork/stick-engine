@@ -106,6 +106,27 @@ impl Framebuffer {
             self.color[i] = c;
         }
     }
+    /// Recolour pixels of colour `from` to `to` inside a disc at `p` of
+    /// radius `r`, clipped to the circle (`clip`, `clip_r`). Depth is left
+    /// untouched; nothing outside existing `from` pixels changes.
+    pub fn recolor_disc(&mut self, p: P2, r: f32, clip: P2, clip_r: f32, from: u8, to: u8) {
+        let (x0, x1) = ((p.x - r).floor() as i32, (p.x + r).ceil() as i32);
+        let (y0, y1) = ((p.y - r).floor() as i32, (p.y + r).ceil() as i32);
+        for y in y0.max(0)..=y1.min(self.h as i32 - 1) {
+            for x in x0.max(0)..=x1.min(self.w as i32 - 1) {
+                let (cx, cy) = (x as f32 + 0.5, y as f32 + 0.5);
+                let (dx, dy) = (cx - p.x, cy - p.y);
+                let (ex, ey) = (cx - clip.x, cy - clip.y);
+                if dx * dx + dy * dy > r * r || ex * ex + ey * ey > clip_r * clip_r {
+                    continue;
+                }
+                let i = y as usize * self.w + x as usize;
+                if self.color[i] == from {
+                    self.color[i] = to;
+                }
+            }
+        }
+    }
     /// Thick limb: capsule between a and b with radius r (px) and a 1 px outline.
     pub fn capsule(&mut self, a: P2, b: P2, r: f32, c: u8, outline: Option<u8>) {
         let ro = if outline.is_some() { r + 1.0 } else { r };

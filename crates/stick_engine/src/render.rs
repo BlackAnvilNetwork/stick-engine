@@ -50,7 +50,7 @@ pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams,
     // scarf accent at the neck
     fb.disc(p(Joint::Neck), b.limb_px + 0.4, map.color(ColorSlot::Accent, 3), None);
     fb.disc(p(Joint::Head), b.head_r * HEIGHT_PX * b.bone_thickness_mul[Bone::Head as usize], near, ol);
-    draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), ol);
+    draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), near, ol);
 }
 
 /// Screen-space direction toward the camera on the ground plane.
@@ -60,7 +60,7 @@ const TO_CAM: (f32, f32) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::F
 /// 3D position, biased behind the face unless the figure faces away, so the
 /// face wins from the front, the hair wins from behind and in profile the
 /// parts show past the head outline. Loose strand tips follow `hair_sway`.
-fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: u8, ol: Option<u8>) {
+fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: u8, skin: u8, ol: Option<u8>) {
     use crate::body::HairStyle as H;
     use crate::math::Vec3;
     let hm = b.head_r * b.bone_thickness_mul[Bone::Head as usize];
@@ -86,30 +86,6 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
         let e = if away { 0.0 } else { -0.03 };
         fb.cone(at(a, e), at(z, e), px(hm * ra), px(hm * rz), c, ol)
     };
-    // Thin base layer in the hair colour over the natural scalp (crown,
-    // top, sides above the ears, back of the head; never the face), drawn
-    // first so every style layers on top and no skin patches show. Each
-    // sample sits on the head sphere at its true depth, so the far side of
-    // the scalp stays hidden behind the head and the near side covers it.
-    if !matches!(b.hair, H::None | H::Mohawk) {
-        for ei in 0..7 {
-            let el = (-35.0 + ei as f32 * 20.0).to_radians(); // -35..85 deg
-            let n_az = 12;
-            for ai in 0..n_az {
-                let az = ai as f32 * std::f32::consts::TAU / n_az as f32;
-                let (u, fw, rt) = (el.sin(), el.cos() * az.cos(), el.cos() * az.sin());
-                // hairline: forehead above u 0.55, temples above u 0.1,
-                // sides/back down to the nape
-                let min_u = if fw > 0.55 { 0.55 } else if fw > 0.0 { 0.25 } else if fw > -0.5 { 0.05 } else { -0.5 };
-                if u < min_u {
-                    continue;
-                }
-                let v = q(u * 0.97, fw * 0.97, rt * 0.97);
-                let p = cam.project(v);
-                fb.disc(P2 { d: p.d - 0.005, ..p }, px(hm * 0.3), c, None);
-            }
-        }
-    }
     match b.hair {
         H::None => {}
         H::Buzz => disc(fb, q(0.32, -0.15, 0.0), 0.95),
@@ -174,18 +150,6 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
     if b.hair == H::None {
         return;
     }
-    // Side of the head in profile: the cap sits behind the head disc's depth,
-    // so from the side the head showed through between the crown and the
-    // hanging hair. Fill the rear half of the head in front of it; the disc
-    // stops short of the face. Mohawk and Buzz keep their shaved sides.
-    let facing = j.fwd.x * TO_CAM.0 + j.fwd.z * TO_CAM.1;
-    if facing.abs() < 0.6 && !matches!(b.hair, H::Mohawk | H::Buzz) {
-        let low = match b.hair {
-            H::Bob | H::LongStraight | H::Ponytail | H::Pigtails => -0.15,
-            _ => 0.1,
-        };
-        fb.disc(at(q(low + 0.3, -0.45, 0.0), -0.09), px(hm * 0.78), c, None);
-    }
     // Hairline over the forehead, depth-biased in front of the face so the
     // style still reads when the figure faces the camera (the cap alone is
     // hidden behind the face disc from the front).
@@ -198,11 +162,35 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
     };
     if fr_r > 0.0 && !away {
         let fd = -0.09;
-        // solid crown between the fringe and the top of the cap (the face
-        // disc otherwise shows through there as a bald patch)
-        fb.disc(at(q(fu + 0.3, -0.05, 0.0), fd), px(hm * (0.35 + fr_r)), c, None);
         fb.cone(at(q(fu, 0.42, -0.72), fd), at(q(fu + 0.08, 0.5, 0.0), fd), px(hm * fr_r), px(hm * fr_r), c, None);
         fb.cone(at(q(fu + 0.08, 0.5, 0.0), fd), at(q(fu, 0.42, 0.72), fd), px(hm * fr_r), px(hm * fr_r), c, None);
+    }
+    // Form-fitted base hair: recolour only head-skin pixels over the scalp
+    // (crown, top, temples above the ears, back of the head). It never adds
+    // pixels, so the head outline and every style's shapes stay exactly as
+    // drawn; only bare scalp skin turns hair-coloured. Samples on the near
+    // side of the head sphere (in front of the flat head disc) recolour;
+    // far-side samples would sit over the face and are skipped by depth.
+    if !matches!(b.hair, H::None | H::Mohawk) {
+        let hc = cam.project(h);
+        let hr = px(hm);
+        for ei in 0..10 {
+            let el = (-25.0 + ei as f32 * 12.0).to_radians(); // -25..83 deg
+            for ai in 0..24 {
+                let az = ai as f32 * std::f32::consts::TAU / 24.0;
+                let (u, fw, rt) = (el.sin(), el.cos() * az.cos(), el.cos() * az.sin());
+                let min_u = if fw > 0.55 { 0.55 } else if fw > 0.0 { 0.25 } else if fw > -0.5 { 0.05 } else { -0.4 };
+                if u < min_u {
+                    continue;
+                }
+                let p = cam.project(q(u, fw, rt));
+                if p.d > hc.d {
+                    continue;
+                }
+                fb.recolor_disc(p, px(hm * 0.22), hc, hr, skin, c);
+            }
+        }
+        let _ = ol;
     }
 }
 

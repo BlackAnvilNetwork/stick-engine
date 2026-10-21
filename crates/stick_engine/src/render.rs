@@ -150,6 +150,18 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
     if b.hair == H::None {
         return;
     }
+    // Side of the head in profile: the cap sits behind the head disc's depth,
+    // so from the side the head showed through between the crown and the
+    // hanging hair. Fill the rear half of the head in front of it; the disc
+    // stops short of the face. Mohawk and Buzz keep their shaved sides.
+    let facing = j.fwd.x * TO_CAM.0 + j.fwd.z * TO_CAM.1;
+    if facing.abs() < 0.6 && !matches!(b.hair, H::Mohawk | H::Buzz) {
+        let low = match b.hair {
+            H::Bob | H::LongStraight | H::Ponytail | H::Pigtails => -0.15,
+            _ => 0.1,
+        };
+        fb.disc(at(q(low + 0.3, -0.45, 0.0), -0.09), px(hm * 0.78), c, None);
+    }
     // Hairline over the forehead, depth-biased in front of the face so the
     // style still reads when the figure faces the camera (the cap alone is
     // hidden behind the face disc from the front).

@@ -8,8 +8,13 @@ use stick_engine::render::{draw_character, DrawOpts};
 fn main() {
     let out = std::env::args().nth(1).unwrap_or_else(|| "hair_crops.ppm".into());
     let (cw, ch) = (48usize, 56usize);
-    let yaws = [0.8f32, 2.37, 3.94, 5.5];
-    let cols = yaws.len() + 2;
+    let yaws: Vec<f32> = match std::env::var("YAWS") {
+        Ok(v) => v.split(',').map(|x| x.parse().unwrap()).collect(),
+        Err(_) => vec![0.8, 2.37, 3.94, 5.5],
+    };
+    // MODES: r = rest, w = walk, n = run (per yaw)
+    let modes: Vec<char> = std::env::var("MODES").unwrap_or_else(|_| "r".into()).chars().collect();
+    let cols = yaws.len() * modes.len();
     let (w, h) = (cw * cols, ch * ALL_HAIR.len());
     let mut sheet = vec![0u32; w * h];
     for (row, style) in ALL_HAIR.iter().enumerate() {
@@ -18,11 +23,19 @@ fn main() {
             g.player.def.equip(stick_engine::gear::GearSlot::MainHand, None);
             g.hair = HairOptions { hair: *style, hair_color: "hair_brown".into() };
             g.hair.apply(&mut g.player.def);
+            let (yaw, mode) = (yaws[col / modes.len()], modes[col % modes.len()]);
             let mut i = Input::default();
-            if col >= yaws.len() { i.right = true; i.run = true; }
-            let n = if col == yaws.len() { 20 } else { 33 };
-            for _ in 0..n { g.update(1.0 / 60.0, &mut i); }
-            if col < yaws.len() { g.player.yaw = yaws[col]; }
+            // move along the facing so walk/run frames keep the yaw
+            let (fx, fz) = (yaw.sin(), yaw.cos());
+            let _ = (fx, fz);
+            if mode != 'r' { i.run = mode == 'n'; }
+            for k in 0..40 {
+                if mode != 'r' { g.player.yaw = yaw; }
+                let mut t = i;
+                if mode != 'r' && k < 39 { t.move_click = Some(g.cam.project(g.player.pos + stick_engine::math::v3(yaw.sin(), 0.0, yaw.cos()) * 3.0)).map(|p| (p.x, p.y)); }
+                g.update(1.0 / 60.0, &mut t);
+            }
+            g.player.yaw = yaw;
             let p = g.player.pos;
             g.cam.cx = p.x - 0.75; g.cam.cz = p.z - 0.75;
             let mut fb = Framebuffer::new(cw, 140);

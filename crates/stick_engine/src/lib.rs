@@ -20,6 +20,7 @@ pub mod math;
 pub mod raster;
 pub mod render;
 pub mod rig;
+pub mod ui;
 
 /// Internal framebuffer resolution. 640x360 keeps an ~80 px stick figure at
 /// roughly 22% of screen height (Diablo-like framing) and upscales 2x/3x/6x

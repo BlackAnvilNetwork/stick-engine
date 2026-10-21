@@ -9,7 +9,10 @@ use crate::gear::{GearLib, GearSlot};
 use crate::math::{v3, Vec3};
 use crate::raster::*;
 use crate::render::{self, DrawOpts};
+use crate::actions::Mode;
+use crate::body::BodyParams;
 use crate::rig;
+use crate::ui::{Panel, UiCmd};
 
 pub const TICK: f32 = 1.0 / 60.0;
 
@@ -28,7 +31,26 @@ pub struct Input {
     pub move_click: Option<(f32, f32)>,
     /// Attack click position (left mouse); attack aims here.
     pub attack_click: Option<(f32, f32)>,
+    /// Hotkeys pressed since the last update (bitmask of `HK_*`; set by
+    /// the host on key-down, consumed by the game).
+    pub hotkeys: u32,
 }
+
+/// Hotkey bit for number key `n` (1..=9): triggers the n-th panel action.
+pub const fn hk_digit(n: u32) -> u32 {
+    1 << (n - 1)
+}
+pub const HK_SEX: u32 = 1 << 9;
+pub const HK_GEAR: u32 = 1 << 10;
+pub const HK_UI: u32 = 1 << 11;
+
+/// Gear presets cycled by the T button: (label, main hand, off hand).
+pub const GEAR_PRESETS: [(&str, Option<&str>, Option<&str>); 4] = [
+    ("SWORD", Some("sword"), None),
+    ("GREATSWORD", Some("greatsword"), None),
+    ("SWORD+SHIELD", Some("sword"), Some("shield")),
+    ("UNARMED", None, None),
+];
 
 struct Particle {
     p: Vec3,
@@ -47,6 +69,12 @@ pub struct Game {
     pub opts: DrawOpts,
     act_dash: usize,
     act_swing: usize,
+    /// Debug button panel (F1 / "UI" button toggles it).
+    pub panel: Panel,
+    /// Action queued by a panel button or hotkey for the next tick.
+    pending: Option<usize>,
+    /// Index into `GEAR_PRESETS`.
+    pub gear_preset: usize,
     target: Option<(f32, f32)>,
     prev: Input,
     accum: f32,
@@ -69,7 +97,23 @@ impl Game {
         let sword = gear.index("sword").map(|base| GearRef { base, look_seed: 0 });
         def.equip(GearSlot::MainHand, sword);
         let player = Character::new(0.0, 0.0, def, &gear, &actions);
+        let mut rows = Vec::new();
+        let mut n = 1;
+        for (i, d) in actions.defs.iter().enumerate() {
+            if matches!(d.mode, Mode::OneShot { .. } | Mode::Cast { .. } | Mode::Additive) && n <= 9 {
+                rows.push((format!("{n} {}", d.id.to_uppercase()), UiCmd::Action(i)));
+                n += 1;
+            }
+        }
+        rows.push((String::new(), UiCmd::ToggleSex));
+        rows.push((String::new(), UiCmd::CycleGear));
+        let mut panel = Panel::new(rows);
+        panel.relabel(UiCmd::ToggleSex, "G MALE".into());
+        panel.relabel(UiCmd::CycleGear, format!("T {}", GEAR_PRESETS[0].0));
         Game {
+            panel,
+            pending: None,
+            gear_preset: 0,
             lib: AnimLibrary::builtin(),
             act_dash: actions.id("dash").expect("dash action"),
             act_swing: actions.id("swing").expect("swing action"),
@@ -118,6 +162,7 @@ impl Game {
 
     /// Advance by real elapsed seconds using a fixed 60 Hz timestep.
     pub fn update(&mut self, dt: f32, input: &mut Input) {
+        self.handle_ui(input);
         self.accum = (self.accum + dt.min(0.25)).min(0.25);
         while self.accum >= TICK {
             self.accum -= TICK;
@@ -125,6 +170,70 @@ impl Game {
             self.tick(&inp);
             input.move_click = None;
             input.attack_click = None;
+        }
+    }
+
+    /// Route panel clicks and hotkeys. Clicks on the panel are consumed so
+    /// they never also move or attack in the world.
+    pub fn handle_ui(&mut self, input: &mut Input) {
+        let mut cmds = Vec::new();
+        if let Some((x, y)) = input.attack_click {
+            if let Some(c) = self.panel.hit(x, y) {
+                cmds.push(c);
+                input.attack_click = None;
+            }
+        }
+        if let Some((x, y)) = input.move_click {
+            if self.panel.hit(x, y).is_some() {
+                input.move_click = None;
+            }
+        }
+        let hk = std::mem::take(&mut input.hotkeys);
+        let actions: Vec<UiCmd> =
+            self.panel.buttons.iter().map(|b| b.cmd).filter(|c| matches!(c, UiCmd::Action(_))).collect();
+        for (i, c) in actions.into_iter().enumerate() {
+            if hk & hk_digit(i as u32 + 1) != 0 {
+                cmds.push(c);
+            }
+        }
+        for (bit, c) in [(HK_SEX, UiCmd::ToggleSex), (HK_GEAR, UiCmd::CycleGear), (HK_UI, UiCmd::TogglePanel)] {
+            if hk & bit != 0 {
+                cmds.push(c);
+            }
+        }
+        for c in cmds {
+            self.run_cmd(c);
+        }
+    }
+
+    /// Execute a panel command (also usable from tests/tools).
+    pub fn run_cmd(&mut self, c: UiCmd) {
+        self.panel.press(c);
+        match c {
+            UiCmd::Action(a) => self.pending = Some(a),
+            UiCmd::TogglePanel => self.panel.visible = !self.panel.visible,
+            UiCmd::ToggleSex => {
+                let d = &mut self.player.def;
+                d.sex = match d.sex {
+                    Sex::Male => Sex::Female,
+                    Sex::Female => Sex::Male,
+                };
+                // same seed, gear, colours and personality; new sex preset
+                d.body = BodyParams::preset(d.sex);
+                let label = format!("G {}", if d.sex == Sex::Male { "MALE" } else { "FEMALE" });
+                self.player.refresh_gear(&self.gear);
+                self.panel.relabel(UiCmd::ToggleSex, label);
+            }
+            UiCmd::CycleGear => {
+                self.gear_preset = (self.gear_preset + 1) % GEAR_PRESETS.len();
+                let (label, main, off) = GEAR_PRESETS[self.gear_preset];
+                let r = |n: Option<&str>| n.and_then(|n| self.gear.index(n)).map(|base| GearRef { base, look_seed: 0 });
+                let (m, o) = (r(main), r(off));
+                self.player.def.equip(GearSlot::MainHand, m);
+                self.player.def.equip(GearSlot::OffHand, o);
+                self.player.refresh_gear(&self.gear);
+                self.panel.relabel(UiCmd::CycleGear, format!("T {label}"));
+            }
         }
     }
 
@@ -154,7 +263,9 @@ impl Game {
         let attack_edge = (inp.attack && !self.prev.attack) || inp.attack_click.is_some();
         let aim_px = inp.attack_click.or(inp.mouse.filter(|_| inp.attack));
         let dash = inp.dash && !self.prev.dash;
-        let request = if attack_edge {
+        let request = if let Some(a) = self.pending.take() {
+            Some(a)
+        } else if attack_edge {
             Some(self.act_swing)
         } else if dash {
             Some(self.act_dash)
@@ -274,6 +385,14 @@ impl Game {
             let s = cam.project(q.p);
             self.fb.plot(s.x as i32, s.y as i32, s.d, q.c);
             if q.life > 0.2 { self.fb.plot(s.x as i32 + 1, s.y as i32, s.d, q.c); }
+        }
+        self.panel.draw(&mut self.fb);
+        if self.panel.visible {
+            let y = self.panel.buttons.last().map(|b| b.y + b.h + 3).unwrap_or(0);
+            let st = format!("STANCE: {}", self.player.stance);
+            crate::ui::text(&mut self.fb, 5, y, &st, shade(R_BONE, 3));
+            let act = format!("ACTION: {}", self.player.action_id(&self.actions));
+            crate::ui::text(&mut self.fb, 5, y + 7, &act, shade(R_BONE, 3));
         }
     }
 

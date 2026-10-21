@@ -1,7 +1,7 @@
 //! Browser host: canvas 2D + putImageData, keyboard/mouse input, rAF loop.
 use std::cell::RefCell;
 use std::rc::Rc;
-use stick_engine::game::{Game, Input};
+use stick_engine::game::{hk_digit, Game, Input, HK_GEAR, HK_SEX, HK_UI};
 use stick_engine::{HEIGHT, WIDTH};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::{Clamped, JsCast};
@@ -23,7 +23,24 @@ fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
         "ShiftLeft" | "ShiftRight" => i.run = down,
         "Space" => i.dash = down,
         "KeyJ" => i.attack = down,
-        _ => return false,
+        _ => return hotkey(i, code, down),
+    }
+    true
+}
+
+/// Panel hotkeys (fire on key-down only): 1-9 actions, G sex, T gear, F1 panel.
+fn hotkey(i: &mut Input, code: &str, down: bool) -> bool {
+    let bit = match code {
+        "KeyG" => HK_SEX,
+        "KeyT" => HK_GEAR,
+        "F1" => HK_UI,
+        c => match c.strip_prefix("Digit").and_then(|d| d.parse::<u32>().ok()) {
+            Some(n @ 1..=9) => hk_digit(n),
+            _ => return false,
+        },
+    };
+    if down {
+        i.hotkeys |= bit;
     }
     true
 }

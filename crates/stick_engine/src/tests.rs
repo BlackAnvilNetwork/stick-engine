@@ -398,3 +398,87 @@ fn archetype_ignores_game_specific_fields() {
     let a = Archetype::from_ron(r#"(id: "knight", stances: ["2h"], silhouette: ["crest_tall"], idle_clip: "idle_stoic")"#);
     assert!(a.is_ok(), "{a:?}");
 }
+
+// ---- debug panel ----
+
+#[test]
+fn panel_has_button_per_triggerable_action() {
+    let g = Game::new(640, 360);
+    let labels: Vec<&str> = g.panel.buttons.iter().map(|b| b.label.as_str()).collect();
+    for l in ["1 DASH", "2 SWING", "3 DODGE", "4 FLINCH", "G MALE", "T SWORD"] {
+        assert!(labels.contains(&l), "missing {l} in {labels:?}");
+    }
+}
+
+#[test]
+fn panel_hit_testing_and_click_consumption() {
+    use crate::ui::UiCmd;
+    let mut g = Game::new(640, 360);
+    let b = g.panel.buttons[0].clone();
+    let (cx, cy) = ((b.x + 2) as f32, (b.y + 2) as f32);
+    assert_eq!(g.panel.hit(cx, cy), Some(b.cmd));
+    assert_eq!(g.panel.hit(600.0, 300.0), None);
+    let start = g.player.pos;
+    let mut i = Input { attack_click: Some((cx, cy)), move_click: Some((cx, cy)), ..Default::default() };
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.action_id(&g.actions), "dash", "button triggers its action");
+    // a non-action button: the click must not move or swing the player
+    let _ = start;
+    let mut g2 = Game::new(640, 360);
+    let sb = g2.panel.buttons.iter().find(|b| b.cmd == UiCmd::ToggleSex).unwrap().clone();
+    let p = ((sb.x + 2) as f32, (sb.y + 2) as f32);
+    let s0 = g2.player.pos;
+    let mut j = Input { attack_click: Some(p), move_click: Some(p), ..Default::default() };
+    for _ in 0..60 {
+        if j.move_click.is_none() { j.move_click = Some(p); } // right-drag held on panel
+        g2.update(1.0 / 60.0, &mut j);
+    }
+    assert_eq!(g2.player.def.sex, Sex::Female);
+    assert_ne!(g2.player.action_id(&g2.actions), "swing");
+    let moved = (g2.player.pos.x - s0.x).abs() + (g2.player.pos.z - s0.z).abs();
+    assert!(moved < 1e-3, "moved {moved}");
+    // hidden panel: buttons don't hit, toggle still does
+    g.run_cmd(UiCmd::TogglePanel);
+    assert_eq!(g.panel.hit(cx, cy), None);
+    let t = g.panel.toggle.clone();
+    assert_eq!(g.panel.hit((t.x + 1) as f32, (t.y + 1) as f32), Some(UiCmd::TogglePanel));
+}
+
+#[test]
+fn hotkeys_trigger_actions_and_toggles() {
+    use crate::game::{hk_digit, HK_GEAR, HK_SEX, HK_UI};
+    let mut g = Game::new(640, 360);
+    let mut i = Input { hotkeys: hk_digit(3), ..Default::default() };
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.action_id(&g.actions), "dodge");
+    assert_eq!(i.hotkeys, 0, "consumed");
+    i.hotkeys = HK_GEAR | HK_UI;
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.stance, "2h");
+    assert!(!g.panel.visible);
+    i.hotkeys = HK_GEAR;
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.stance, "1h_shield");
+    i.hotkeys = HK_GEAR;
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.stance, "unarmed");
+    i.hotkeys = HK_SEX;
+    g.update(1.0 / 60.0, &mut i);
+    assert_eq!(g.player.def.sex, Sex::Female);
+}
+
+#[test]
+fn sex_toggle_changes_body_keeps_seed_and_gear() {
+    use crate::ui::UiCmd;
+    let mut g = Game::new(640, 360);
+    g.player.def.seed = 77;
+    let before = g.player.def.clone();
+    g.run_cmd(UiCmd::ToggleSex);
+    let d = &g.player.def;
+    assert_eq!(d.sex, Sex::Female);
+    assert_eq!(d.body, BodyParams::preset(Sex::Female));
+    assert!(d.body.height < before.body.height && d.body.hip_w > before.body.hip_w);
+    assert_eq!((d.seed, d.gear), (before.seed, before.gear));
+    g.run_cmd(UiCmd::ToggleSex);
+    assert_eq!(g.player.def.body, before.body);
+}

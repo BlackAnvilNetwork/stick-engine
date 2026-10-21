@@ -11,7 +11,13 @@ Characters are **procedurally drawn stick people** with no sprites and no 3D mod
 | Run | hold **Shift** while moving |
 | Dash | **Space** (dashes in the move direction, or facing; 0.45 s cooldown) |
 | Sword swing | **Left click** (aims at cursor) or **J** |
+| Trigger action N | **1-9** or click its panel button (1 Dash, 2 Swing, 3 Dodge, 4 Flinch, from `actions.ron`) |
+| Toggle Male/Female | **G** or the `G` panel button (same seed and gear, new body preset) |
+| Cycle gear | **T** or the `T` panel button: sword, greatsword, sword+shield, unarmed |
+| Show/hide debug panel | **F1** or the `F1 UI` button |
 | Quit (native) | Esc |
+
+The debug panel sits in the top-left corner of the framebuffer and works the same in the native and web hosts. Clicks on it are consumed, so they never move or swing the character. It also shows the current stance and action.
 
 Add `#demo` to the web URL (or `--demo` natively) for a scripted autoplay. `#demo&t=4.7` fast-forwards to a moment.
 

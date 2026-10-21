@@ -2,7 +2,7 @@
 use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
-use stick_engine::game::{Game, Input};
+use stick_engine::game::{hk_digit, Game, Input, HK_GEAR, HK_SEX, HK_UI};
 use stick_engine::raster::LUT;
 use stick_engine::{HEIGHT, WIDTH};
 use winit::application::ApplicationHandler;
@@ -64,6 +64,18 @@ impl ApplicationHandler for App {
                         KeyCode::Space => i.dash = down,
                         KeyCode::KeyJ => i.attack = down,
                         KeyCode::Escape => el.exit(),
+                        KeyCode::KeyG if down => i.hotkeys |= HK_SEX,
+                        KeyCode::KeyT if down => i.hotkeys |= HK_GEAR,
+                        KeyCode::F1 if down => i.hotkeys |= HK_UI,
+                        KeyCode::Digit1 if down => i.hotkeys |= hk_digit(1),
+                        KeyCode::Digit2 if down => i.hotkeys |= hk_digit(2),
+                        KeyCode::Digit3 if down => i.hotkeys |= hk_digit(3),
+                        KeyCode::Digit4 if down => i.hotkeys |= hk_digit(4),
+                        KeyCode::Digit5 if down => i.hotkeys |= hk_digit(5),
+                        KeyCode::Digit6 if down => i.hotkeys |= hk_digit(6),
+                        KeyCode::Digit7 if down => i.hotkeys |= hk_digit(7),
+                        KeyCode::Digit8 if down => i.hotkeys |= hk_digit(8),
+                        KeyCode::Digit9 if down => i.hotkeys |= hk_digit(9),
                         _ => {}
                     }
                 }

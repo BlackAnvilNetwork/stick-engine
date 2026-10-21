@@ -1,7 +1,7 @@
 # Stick Engine
 
 A tiny, fast, CPU pixel game engine in Rust. It runs in the browser via WASM and natively.
-Characters are **procedurally drawn stick people** with no sprites and no 3D models. Skeleton joints are 3D, projected isometrically into a 640×360 indexed-colour framebuffer and upscaled with crisp pixels. See `PLAN.md` for the full design and roadmap, including the planned 3D camera mode.
+Characters are **procedurally drawn stick people** with no sprites and no 3D models. Skeleton joints are 3D, projected isometrically into a 640×360 indexed-colour framebuffer and upscaled with crisp pixels. See `PLAN.md` for the full design and roadmap. Planned: IK, crowds, combat helpers and an optional 3D camera mode. Game-specific integration (e.g. Black Anvil) lives in the game repos.
 
 ## Controls
 
@@ -37,48 +37,61 @@ This folder lives in OneDrive, and syncing `target/` (GBs) is slow. `.cargo/conf
 
 ## Layout
 ```
-crates/stick_engine/   core: math, raster (capsules, discs, lines, z-buffer, palette), camera (iso),
-                       rig (FK + drawing), anim (poses/clips/animator), character (state machine), game
-crates/stick_engine/assets/clips/*.ron   animation clips (data)
-crates/stick_web/      wasm-bindgen host (canvas, input, rAF loop)
-crates/stick_native/   winit + softbuffer host
-index.html, Trunk.toml web shell
+crates/stick_engine/src/
+  math.rs       vectors, angle helpers, Pcg32 (deterministic RNG)
+  anim.rs       19-channel Pose, masks, clips, ClipMeta (events-only), layered Animator   [headless]
+  rig.rs        Joint/Bone enums, forward kinematics                                      [headless]
+  body.rs       CharacterDef, sex presets, Archetype + from_seed                          [headless]
+  gear.rs       gear shapes attached to joints, stance derivation                         [headless]
+  gait.rs       procedural walk/run                                                       [headless]
+  actions.rs    data-driven action table (actions.ron)                                    [headless]
+  character.rs  generic action state machine                                              [headless]
+  color.rs      ColorSlot + RampMap (team colour, tint, hit flash)
+  raster.rs     framebuffer, capsules/discs/lines, ramp palette + 256-entry LUT
+  render.rs     draws body + gear (outline on by default)
+  camera.rs     iso projection;  game.rs  demo scene
+crates/stick_engine/assets/   actions.ron, clips/*.ron, gear/*.ron, archetypes/*.ron (examples)
+crates/stick_web/             wasm-bindgen host (canvas, input, rAF loop)
+crates/stick_native/          winit + softbuffer host
+index.html, Trunk.toml        web shell
 ```
+"Headless" modules don't draw or touch the camera, so tools, tests and servers can use them.
 
 ## How the animation system works
-- A **pose** is 16 named channels, angles in degrees: `lean twist bob l_hip l_knee r_hip r_knee l_shoulder l_elbow l_arm_out r_shoulder r_elbow r_arm_out sword_yaw sword_pitch head` (`bob` is metres of pelvis drop or lift).
-  Hips and shoulders swing forward (+) or back (−) from hanging straight down, knees and elbows bend, `*_arm_out` raises the arm sideways, `twist` yaws the upper body, and `sword_yaw`/`sword_pitch` aim the blade relative to the upper body.
-- A **clip** is a RON file: keyed poses over time, smoothstep-interpolated, looping or one-shot, with optional named events.
-- `rig::solve` turns a pose into 3D joints (forward kinematics), and `rig::draw` rasterizes them as capsule limbs, a circle head and a line sword.
-- `character.rs` holds the **state machine**. Each `Action` has an `ActionDef { clip, blend, mode }` in the `ACTIONS` table. `Loop { ref_speed }` scales playback by ground speed (so feet match movement). `OneShot { next }` plays once and can't be interrupted.
+- A **pose** has 19 channels, addressed by `anim::Ch` (degrees, `bob` in metres): `lean twist bob l_hip l_knee r_hip r_knee l_shoulder l_elbow l_arm_out r_shoulder r_elbow r_arm_out r_wpn_yaw r_wpn_pitch l_wpn_yaw l_wpn_pitch head root_pitch`.
+  - `r_wpn_*`/`l_wpn_*` aim the item in each hand.
+  - `root_pitch` rotates the whole body (rolls, knockdowns), while `lean` only bends the spine.
+  - Cross-fades take the shortest arc.
+- **Layers:** the base layer is the procedural gait (`gait.rs`, there are no walk/run clips), blended with the stance's idle clip. The action clip goes on top according to its `mask` (`Upper`, `Lower`, `Full` or `Additive`), then any additive clips (e.g. `hit_flinch`).
+- A **clip** is a RON file with keyed poses, a `mask`, an optional `speed_scale`, an optional `hold: Some((t0, t1))` for casts, and named events. Events drive gameplay windows for any action: `hit_start`/`hit_end`, `iframes_start`/`iframes_end`, `cancel_open`/`cancel_close`, plus `release`, `commit`, `footstep`, `fx_*` and `sfx_*`.
+- `ClipMeta::from_ron` reads only a clip's timing (no keys) for headless use.
+- **Actions** are data in `assets/actions.ron`: mode (`Idle`, `Gait`, `OneShot`, `Cast`, `Additive`), blend time, per-stance clips, `move_mult`, `turn_rate`, `chain`, `cooldown`, `face`, `root_motion` and `weapon`. A clip is chosen by stance (`stances[stance]` → `stances["any"]` → unavailable). The stance is derived from the equipped hands (`unarmed`, `1h`, `1h_shield`, `dual`, `2h`, …).
+- `rig::solve` turns a pose into 3D joints, and `render::draw_character` draws the body and gear. Colours are slots resolved by a `RampMap`.
 
 ## Adding an animation (e.g. a "kick")
-1. **Clip file:** create `crates/stick_engine/assets/clips/kick.ron`:
+1. **Clip file:** `crates/stick_engine/assets/clips/kick.ron`:
    ```ron
    (
        name: "kick",
        duration: 0.4,
        looping: false,
-       base: { "lean": -5.0 },                       // shared by all keys
+       mask: Full,
+       base: { "lean": -5.0 },
        keys: [
            (t: 0.0,  pose: { "r_hip": 0.0,  "r_knee": 10.0 }),
-           (t: 0.15, pose: { "r_hip": 40.0, "r_knee": 90.0 }),   // chamber
-           (t: 0.22, pose: { "r_hip": 85.0, "r_knee": 0.0, "lean": -15.0 }), // extend
+           (t: 0.15, pose: { "r_hip": 40.0, "r_knee": 90.0 }),
+           (t: 0.22, pose: { "r_hip": 85.0, "r_knee": 0.0, "lean": -15.0 }),
            (t: 0.4,  pose: { "r_hip": 0.0,  "r_knee": 10.0 }),
        ],
        events: [ (t: 0.2, name: "hit_start"), (t: 0.28, name: "hit_end") ],
    )
    ```
-   Unknown channel names are a load error, so typos are caught by `cargo test`.
-2. **Register the clip:** add `include_str!("../assets/clips/kick.ron"),` to `BUILTIN_CLIPS` in `anim.rs`.
-3. **Register the action:** add `Kick` to `enum Action`, and add a row to `ACTIONS` in `character.rs`:
-   `ActionDef { action: Action::Kick, clip: "kick", blend: 0.05, mode: Mode::OneShot { next: Action::Idle } },`
-   Also add `Action::Kick => (0.0, 0.0),` to the movement `match` in `Character::step`.
-4. **Trigger it:** add a `kick: bool` to `Intent`, then start it next to the swing/dash triggers in `Character::step` (`self.enter(Action::Kick)`). Bind a key in `game::Input` and both hosts (e.g. `KeyK`).
-5. `cargo test` (the `builtin_clips_parse` test checks every action's clip exists), then `trunk serve`.
-
-For a new **locomotion** style (e.g. sneak), use `Mode::Loop { ref_speed: <m/s> }` and choose it where Walk/Run are chosen.
-To tweak an existing move, just edit its `.ron` and rebuild. `AnimLibrary::register_ron` also accepts clips at runtime, ready for hot-reload or a future pose editor.
+   Unknown channels or events and unpaired start/end events are load errors.
+2. **Action row** in `assets/actions.ron`:
+   `(id: "kick", mode: OneShot(next: "idle"), blend: 0.05, stances: { "any": "kick" }, move_mult: 0.0, face: Aim),`
+3. **Built-in clips** are embedded: add `include_str!("../assets/clips/kick.ron"),` to `BUILTIN_CLIPS` in `anim.rs`. Alternatively, load it at runtime with `AnimLibrary::register_ron` and `ActionTable::from_ron`, with no Rust changes.
+4. **Trigger** it with `Intent { request: actions.id("kick"), .. }`. The demo binds keys in `game.rs` and the hosts.
+5. Run `cargo test` (it checks every action's clips exist), then `trunk serve`.
 
 ## License
 

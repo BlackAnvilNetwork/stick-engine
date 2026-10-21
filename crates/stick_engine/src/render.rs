@@ -50,7 +50,7 @@ pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams,
     // scarf accent at the neck
     fb.disc(p(Joint::Neck), b.limb_px + 0.4, map.color(ColorSlot::Accent, 3), None);
     fb.disc(p(Joint::Head), b.head_r * HEIGHT_PX * b.bone_thickness_mul[Bone::Head as usize], near, ol);
-    draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), map.color(ColorSlot::Hair, 5), ol);
+    draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), ol);
 }
 
 /// Screen-space direction toward the camera on the ground plane.
@@ -60,7 +60,7 @@ const TO_CAM: (f32, f32) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::F
 /// 3D position, biased behind the face unless the figure faces away, so the
 /// face wins from the front, the hair wins from behind and in profile the
 /// parts show past the head outline. Loose strand tips follow `hair_sway`.
-fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: u8, hl: u8, ol: Option<u8>) {
+fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: u8, ol: Option<u8>) {
     use crate::body::HairStyle as H;
     use crate::math::Vec3;
     let hm = b.head_r * b.bone_thickness_mul[Bone::Head as usize];
@@ -162,12 +162,12 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
     };
     if fr_r > 0.0 && !away {
         let fd = -0.09;
+        // solid crown between the fringe and the top of the cap (the face
+        // disc otherwise shows through there as a bald patch)
+        fb.disc(at(q(fu + 0.3, -0.05, 0.0), fd), px(hm * (0.35 + fr_r)), c, None);
         fb.cone(at(q(fu, 0.42, -0.72), fd), at(q(fu + 0.08, 0.5, 0.0), fd), px(hm * fr_r), px(hm * fr_r), c, None);
         fb.cone(at(q(fu + 0.08, 0.5, 0.0), fd), at(q(fu, 0.42, 0.72), fd), px(hm * fr_r), px(hm * fr_r), c, None);
     }
-    // One-pixel sheen on the crown (light from the upper left).
-    let sd = if away { -0.1 } else { -0.095 };
-    fb.line(at(q(0.95, 0.05, -0.35), sd), at(q(0.9, -0.25, 0.1), sd), hl);
 }
 
 

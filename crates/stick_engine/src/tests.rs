@@ -392,3 +392,9 @@ fn click_to_move_reaches_target() {
     let (dx, dz) = (g.player.pos.x - goal.0, g.player.pos.z - goal.1);
     assert!(dx * dx + dz * dz < 0.2);
 }
+
+#[test]
+fn archetype_ignores_game_specific_fields() {
+    let a = Archetype::from_ron(r#"(id: "knight", stances: ["2h"], silhouette: ["crest_tall"], idle_clip: "idle_stoic")"#);
+    assert!(a.is_ok(), "{a:?}");
+}

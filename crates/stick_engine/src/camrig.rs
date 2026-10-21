@@ -76,15 +76,38 @@ pub struct Subject {
     pub head: Vec3,
 }
 
+/// Body is hidden (first-person drawing) while the eye is within this
+/// distance of the head centre (metres).
+pub const FP_HIDE_RADIUS: f32 = 0.4;
+
+/// Exponential follow rate of the third-person yaw (1/s).
+pub const TP_YAW_FOLLOW: f32 = 8.0;
+
+/// Position of a mode on the camera rail: iso 0, third-person 1, first-person 2.
+/// Every view is a point on the rail, so any transition that involves
+/// first-person travels along the third-person boom (1..2) and never cuts
+/// through the body, and FP <-> iso is one continuous eased move.
+pub fn rail(mode: CamMode) -> f32 {
+    match mode {
+        CamMode::Iso => 0.0,
+        CamMode::ThirdPerson => 1.0,
+        CamMode::FirstPerson => 2.0,
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct CamRig {
     pub cfg: CamConfig,
     pub mode: CamMode,
-    /// Look yaw for the 3D modes (same convention as character yaw).
+    /// Camera yaw for the 3D modes (same convention as character yaw).
+    /// Follows the character's facing: locked in first-person, smoothed in
+    /// third-person.
     pub yaw: f32,
     /// First-person pitch (radians, positive looks down).
     pub fp_pitch: f32,
-    from: Option<View>,
+    /// Current rail position (see `rail`).
+    pub r: f32,
+    r_from: f32,
     /// Blend progress 0..1 (1 = settled).
     pub t: f32,
     focus: Vec3,
@@ -94,7 +117,8 @@ pub struct CamRig {
 
 impl CamRig {
     pub fn new(cfg: CamConfig) -> CamRig {
-        CamRig { cfg, mode: cfg.mode, yaw: 0.0, fp_pitch: 0.12, from: None, t: 1.0, focus: v3(0.0, 1.1, 0.0), view: None }
+        let r = rail(cfg.mode);
+        CamRig { cfg, mode: cfg.mode, yaw: 0.0, fp_pitch: 0.12, r, r_from: r, t: 1.0, focus: v3(0.0, 1.1, 0.0), view: None }
     }
 
     /// Focal length (px) shared by the 3D modes.
@@ -102,44 +126,73 @@ impl CamRig {
         ISO_SCALE * self.cfg.tp_distance
     }
 
-    /// Settled view for `mode` (iso returns the iso view at `cx, cz`).
-    pub fn target_view(&self, mode: CamMode, s: &Subject, cx: f32, cz: f32, w: f32, h: f32) -> View {
-        match mode {
-            CamMode::Iso => View::iso(cx, cz, w, h),
-            CamMode::ThirdPerson => View {
-                target: self.focus,
-                yaw: self.yaw,
-                pitch: self.cfg.tp_pitch_deg.to_radians(),
-                inv_d: 1.0 / self.cfg.tp_distance,
-                scale: ISO_SCALE,
-                skew: 0.0,
-                ax: w * 0.5,
-                ay: h * 0.55,
-            },
-            CamMode::FirstPerson => {
-                let d = 0.1;
-                let fh = v3(self.yaw.sin(), 0.0, self.yaw.cos());
-                let eye = s.head + fh * 0.14 + v3(0.0, 0.04, 0.0);
-                let mut v = View { target: eye, yaw: self.yaw, pitch: self.fp_pitch, inv_d: 1.0 / d, scale: 0.0, skew: 0.0, ax: w * 0.5, ay: h * 0.5 };
-                v.scale = self.focal() * v.inv_d;
-                v.target = eye + v.fwd() * d;
-                v
-            }
+    fn tp_view(&self, w: f32, h: f32) -> View {
+        View {
+            target: self.focus,
+            yaw: self.yaw,
+            pitch: self.cfg.tp_pitch_deg.to_radians(),
+            inv_d: 1.0 / self.cfg.tp_distance,
+            scale: ISO_SCALE,
+            skew: 0.0,
+            ax: w * 0.5,
+            ay: h * 0.55,
         }
     }
 
-    /// Switch mode, blending from the view currently on screen.
-    pub fn set_mode(&mut self, mode: CamMode, s: &Subject, current: View) {
+    /// First-person eye position for the subject.
+    pub fn fp_eye(&self, s: &Subject) -> Vec3 {
+        let fh = v3(self.yaw.sin(), 0.0, self.yaw.cos());
+        s.head + fh * 0.14 + v3(0.0, 0.04, 0.0)
+    }
+
+    /// View at rail position `r` (0 iso, 1 third-person, 2 first-person).
+    /// 0..1 is the ortho -> perspective dolly zoom; 1..2 is the boom from
+    /// the third-person position in to the eye at constant focal length.
+    #[allow(clippy::too_many_arguments)]
+    pub fn view_at(&self, r: f32, s: &Subject, cx: f32, cz: f32, w: f32, h: f32) -> View {
+        let r = r.clamp(0.0, 2.0);
+        let tp = self.tp_view(w, h);
+        if r <= 1.0 {
+            return View::iso(cx, cz, w, h).lerp(&tp, r);
+        }
+        let b = r - 1.0;
+        let l = |a: f32, z: f32, t: f32| a + (z - a) * t;
+        let d = l(self.cfg.tp_distance, 0.1, b);
+        // Pitch reaches the first-person pitch only at the very end of the
+        // boom, so the boom keeps its third-person (from-above) direction
+        // and never swings through the torso when looking up.
+        let pitch = l(tp.pitch, self.fp_pitch, b.powi(4));
+        let mut fp = View { target: self.fp_eye(s), yaw: self.yaw, pitch: self.fp_pitch, inv_d: 10.0, scale: 0.0, skew: 0.0, ax: w * 0.5, ay: h * 0.5 };
+        fp.target = fp.target + fp.fwd() * 0.1;
+        View {
+            target: tp.target.lerp(fp.target, b),
+            yaw: self.yaw,
+            pitch,
+            inv_d: 1.0 / d,
+            scale: self.focal() / d,
+            skew: 0.0,
+            ax: w * 0.5,
+            ay: l(tp.ay, fp.ay, b),
+        }
+    }
+
+    /// Settled view for `mode` (iso returns the iso view at `cx, cz`).
+    pub fn target_view(&self, mode: CamMode, s: &Subject, cx: f32, cz: f32, w: f32, h: f32) -> View {
+        self.view_at(rail(mode), s, cx, cz, w, h)
+    }
+
+    /// Switch mode, blending along the rail from where the camera is now.
+    pub fn set_mode(&mut self, mode: CamMode, s: &Subject, _current: View) {
         if mode == self.mode {
             return;
         }
-        if self.mode == CamMode::Iso {
-            // Entering 3D: start behind the character.
+        if self.r <= 1e-4 {
+            // Entering 3D from iso: start behind the character.
             self.yaw = s.yaw;
             self.focus = s.pos + v3(0.0, 1.1, 0.0);
         }
         self.mode = mode;
-        self.from = Some(current);
+        self.r_from = self.r;
         self.t = 0.0;
     }
 
@@ -148,38 +201,45 @@ impl CamRig {
         self.yaw = s.yaw;
         self.focus = s.pos + v3(0.0, 1.1, 0.0);
         self.mode = mode;
-        self.from = None;
+        self.r = rail(mode);
+        self.r_from = self.r;
         self.t = 1.0;
     }
 
-    /// Advance one step: look input (yaw, pitch in -1..1), smoothing, blend.
-    #[allow(clippy::too_many_arguments)]
-    pub fn update(&mut self, dt: f32, look_yaw: f32, look_pitch: f32, s: &Subject, cx: f32, cz: f32, w: f32, h: f32) {
-        if self.mode != CamMode::Iso {
-            self.yaw -= look_yaw * self.cfg.look_speed * dt;
-            let lim = self.cfg.fp_pitch_limit_deg.to_radians();
-            self.fp_pitch = (self.fp_pitch + look_pitch * self.cfg.look_speed * dt).clamp(-lim, lim);
-        }
-        let want = s.pos + v3(0.0, 1.1, 0.0);
-        self.focus = self.focus.lerp(want, 1.0 - (-dt * 8.0).exp());
-        let to = self.target_view(self.mode, s, cx, cz, w, h);
-        if self.t < 1.0 {
-            self.t = (self.t + dt / self.cfg.blend_s.max(1e-3)).min(1.0);
-        }
-        self.view = match (self.from, self.t < 1.0) {
-            (Some(f), true) => Some(f.lerp(&to, ease(self.t))),
-            _ if self.mode == CamMode::Iso => None,
-            _ => Some(to),
-        };
-        if self.t >= 1.0 {
-            self.from = None;
+    /// Blend duration for the current move: one eased timeline, longer
+    /// for the chained FP <-> iso move.
+    fn duration(&self) -> f32 {
+        let span = (rail(self.mode) - self.r_from).abs().max(0.25);
+        self.cfg.blend_s.max(1e-3) * (0.5 + 0.5 * span)
+    }
+
+    /// Follow the character's facing: locked in first-person, exponential
+    /// shortest-arc follow in third-person (no 360-degree spins).
+    pub fn follow_yaw(&mut self, dt: f32, subject_yaw: f32) {
+        match self.mode {
+            CamMode::FirstPerson => self.yaw = subject_yaw,
+            _ => {
+                let k = 1.0 - (-dt * TP_YAW_FOLLOW).exp();
+                self.yaw = crate::math::wrap_angle(self.yaw + crate::math::angle_diff(self.yaw, subject_yaw) * k);
+            }
         }
     }
 
-    /// Ground-plane movement direction for screen-aligned keys (sx right,
-    /// sy down) in the 3D modes: forward follows the look yaw.
-    pub fn move_dir(&self, sx: f32, sy: f32) -> (f32, f32) {
-        let (sn, cs) = self.yaw.sin_cos();
-        (sn * -sy - cs * sx, cs * -sy + sn * sx)
+    /// Advance one step: pitch input (-1..1), yaw follow, smoothing, blend.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update(&mut self, dt: f32, look_pitch: f32, s: &Subject, cx: f32, cz: f32, w: f32, h: f32) {
+        if self.mode != CamMode::Iso {
+            let lim = self.cfg.fp_pitch_limit_deg.to_radians();
+            self.fp_pitch = (self.fp_pitch + look_pitch * self.cfg.look_speed * dt).clamp(-lim, lim);
+        }
+        self.follow_yaw(dt, s.yaw);
+        let want = s.pos + v3(0.0, 1.1, 0.0);
+        self.focus = self.focus.lerp(want, 1.0 - (-dt * 8.0).exp());
+        if self.t < 1.0 {
+            self.t = (self.t + dt / self.duration()).min(1.0);
+        }
+        let to = rail(self.mode);
+        self.r = self.r_from + (to - self.r_from) * ease(self.t);
+        self.view = if self.r <= 1e-5 { None } else { Some(self.view_at(self.r, s, cx, cz, w, h)) };
     }
 }

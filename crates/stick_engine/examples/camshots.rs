@@ -4,7 +4,8 @@
 
 //! Screenshots and frame cost for each camera mode (headless).
 //! `cargo run --release -p stick_engine --example camshots -- <out_dir>`
-//! writes iso / tp / fp / transition frames as PPM at the internal resolution.
+//! writes iso / tp / fp / transition frames, plus mid-path frames of the
+//! chained first-person -> iso move (`persp-fp2iso-<t>.ppm`), as PPM at the internal resolution.
 use std::time::Instant;
 use stick_engine::camrig::CamMode;
 use stick_engine::game::{Game, Input};
@@ -58,4 +59,18 @@ fn main() {
     g.render();
     save(&g, &format!("{out}/persp-transition.ppm"));
     println!("transition t={:.2}", g.rig.t);
+    // First-person -> iso: boom pull-back then dolly zoom, one eased move.
+    g.set_cam_mode(CamMode::FirstPerson);
+    settle(&mut g, 1.5);
+    g.set_cam_mode(CamMode::Iso);
+    let mut i = Input::default();
+    for want in [0.15f32, 0.3, 0.45, 0.6, 0.8] {
+        while g.rig.t < want {
+            g.update(1.0 / 240.0, &mut i);
+        }
+        g.render();
+        let tag = (want * 100.0) as u32;
+        save(&g, &format!("{out}/persp-fp2iso-{tag:02}.ppm"));
+        println!("fp2iso t={:.2} rail={:.2}", g.rig.t, g.rig.r);
+    }
 }

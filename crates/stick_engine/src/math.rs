@@ -43,6 +43,11 @@ impl Mul<f32> for Vec3 {
     }
 }
 
+/// Wrap an angle to (-PI, PI].
+pub fn wrap_angle(a: f32) -> f32 {
+    angle_diff(0.0, a)
+}
+
 /// Shortest signed angle difference a->b in radians.
 pub fn angle_diff(a: f32, b: f32) -> f32 {
     let mut d = (b - a) % std::f32::consts::TAU;

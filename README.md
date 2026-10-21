@@ -7,21 +7,21 @@ Characters are **procedurally drawn stick people** with no sprites and no 3D mod
 
 | Action | Keys |
 |---|---|
-| Walk | WASD / arrow keys (screen-relative), or **right-click** (hold to steer) to move to a spot |
+| Walk | Iso: WASD / arrow keys (screen-relative). 3D modes: **W/S** forward/back along the facing, **A/D** (or **Q/E**) turn the character. Or **right-click** (hold to steer) to move to a spot in any mode |
 | Run | hold **Shift** while moving |
 | Dash | **Space** (dashes in the move direction, or facing; 0.45 s cooldown) |
 | Sword swing | **Left click** (aims at cursor) or **J** |
 | Cycle camera (iso → third-person → first-person) | **V** |
-| Look yaw / pitch (3D modes) | **Q / E** / **R / F** |
+| Camera pitch (3D modes) | **R / F** |
 | Quit (native) | Esc |
 
 ### Camera modes
 
 - **Iso** (default): the original 2:1 dimetric view, byte-identical to earlier output.
-- **Third-person**: behind and above the character, pitched 30° down, smoothed, `tp_distance` 6 m.
-- **First-person**: eye at the head; head and body are hidden, forearms and held gear are drawn; pitch clamped to ±60°.
+- **Third-person**: behind and above the character, pitched 30° down, `tp_distance` 6 m. The boom follows the character's facing with an exponential, shortest-arc yaw follow.
+- **First-person**: eye at the head, yaw locked to the character's facing; head and body are hidden only while the eye is within 0.4 m of the head, forearms and held gear are drawn; pitch clamped to ±60°.
 
-Iso ↔ 3D uses an ortho→perspective dolly-zoom; TP ↔ FP is an eased boom move (`blend_s` 0.7 s). In 3D modes WASD is camera-relative, and click-to-move/aim pick the ground in every mode. Configure via `CamConfig` (`Game::set_cam_config`), `--cam iso|tp|fp` or `STICK_CAM` natively, or `#cam=tp` on the web. `cargo run --release -p stick_engine --example camshots -- out/` renders each mode and prints per-mode frame cost.
+All modes sit on one camera rail (iso → TP dolly-zoom → TP → FP boom), so every move that involves first-person travels along the third-person boom and never through the body; FP ↔ iso is a single eased move through TP (no stall), blending the facing yaw/pitch to the iso angles (`blend_s` 0.7 s for one step, 1.05 s for FP ↔ iso). Turning turns the character and the camera follows; click-to-move/aim pick the ground in every mode and the character turns toward the target. Iso keeps its fixed camera. Configure via `CamConfig` (`Game::set_cam_config`), `--cam iso|tp|fp` or `STICK_CAM` natively, or `#cam=tp` on the web. `cargo run --release -p stick_engine --example camshots -- out/` renders each mode and prints per-mode frame cost.
 
 Add `#demo` to the web URL (or `--demo` natively) for a scripted autoplay. `#demo&t=4.7` fast-forwards to a moment.
 

@@ -40,12 +40,16 @@ pub struct Input {
     pub hair_color: bool,
     /// Held: cycle camera mode iso -> third -> first person on press (V).
     pub cam_cycle: bool,
-    /// Held: look left / right / up / down in the 3D camera modes (Q / E / R / F).
+    /// Held: in the 3D camera modes Q / E turn the character (like A / D)
+    /// and R / F pitch the camera up / down.
     pub look_left: bool,
     pub look_right: bool,
     pub look_up: bool,
     pub look_down: bool,
 }
+
+/// Character turn rate in the 3D camera modes (radians per second).
+pub const TURN_SPEED: f32 = 2.6;
 
 struct Particle {
     p: Vec3,
@@ -137,12 +141,22 @@ impl Game {
         Subject { pos: self.player.pos, yaw: self.player.yaw, head: j.get(rig::Joint::Head) }
     }
 
+    #[cfg(test)]
+    pub(crate) fn subject_for_tests(&self) -> Subject {
+        self.subject()
+    }
+
+    /// Advance only the camera (tests).
+    #[cfg(test)]
+    pub(crate) fn step_camera_for_tests(&mut self, dt: f32) {
+        self.update_camera(dt, &Input::default());
+    }
+
     fn update_camera(&mut self, dt: f32, inp: &Input) {
         let s = self.subject();
-        let ly = inp.look_right as i32 as f32 - inp.look_left as i32 as f32;
         let lp = inp.look_down as i32 as f32 - inp.look_up as i32 as f32;
         let (w, h) = (self.cam.w, self.cam.h);
-        self.rig.update(dt, ly, lp, &s, self.cam.cx, self.cam.cz, w, h);
+        self.rig.update(dt, lp, &s, self.cam.cx, self.cam.cz, w, h);
         self.cam.view = self.rig.view;
     }
 
@@ -190,7 +204,23 @@ impl Game {
         if inp.down { sy += 1.0; }
         if inp.left { sx -= 1.0; }
         if inp.right { sx += 1.0; }
-        let mut dir = if self.rig.mode == CamMode::Iso { (sx + sy, sy - sx) } else { self.rig.move_dir(sx, sy) };
+        let iso = self.rig.mode == CamMode::Iso;
+        let mut keep_facing = false;
+        let mut dir = if iso {
+            (sx + sy, sy - sx)
+        } else {
+            // 3D: A/D and Q/E turn the character (the camera follows its
+            // facing); W/S walk forward/back along the facing.
+            let turn = sx + inp.look_right as i32 as f32 - inp.look_left as i32 as f32;
+            self.player.yaw = crate::math::wrap_angle(self.player.yaw - turn.clamp(-1.0, 1.0) * TURN_SPEED * TICK);
+            keep_facing = true;
+            sx = 0.0;
+            let (sn, cs) = self.player.yaw.sin_cos();
+            (sn * -sy, cs * -sy)
+        };
+        if !iso && (inp.look_left || inp.look_right || inp.left || inp.right) {
+            self.target = None;
+        }
         if sx != 0.0 || sy != 0.0 {
             self.target = None;
         }
@@ -205,6 +235,7 @@ impl Game {
                 self.target = None;
             } else {
                 dir = (dx, dz);
+                keep_facing = false; // turn toward the click target
             }
         }
         let attack_edge = (inp.attack && !self.prev.attack) || inp.attack_click.is_some();
@@ -223,6 +254,7 @@ impl Game {
             request,
             release: false,
             aim: aim_px.and_then(|(x, y)| self.cam.pick_ground(x, y)),
+            keep_facing,
         };
         if request.is_some() {
             self.target = None;
@@ -309,7 +341,7 @@ impl Game {
         let pp = cam.project(self.player.pos);
         let head = self.player_joints().get(rig::Joint::Head);
         // First person once the eye reaches the head: hide head and torso.
-        let fp = cam.view.and_then(|v| v.eye()).is_some_and(|e| (e - head).len() < 0.6);
+        let fp = cam.view.and_then(|v| v.eye()).is_some_and(|e| (e - head).len() < crate::camrig::FP_HIDE_RADIUS);
         if !pp.culled() && !fp {
             self.fb.shadow_ellipse(pp.x, pp.y, 13.0 * pp.s, 6.0 * pp.s, C_SHADOW);
         }

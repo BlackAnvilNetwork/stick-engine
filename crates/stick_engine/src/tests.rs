@@ -482,3 +482,76 @@ fn sex_toggle_changes_body_keeps_seed_and_gear() {
     g.run_cmd(UiCmd::ToggleSex);
     assert_eq!(g.player.def.body, before.body);
 }
+
+// ---- chest silhouette cue ----
+
+#[test]
+fn male_preset_draws_no_chest_shapes() {
+    use crate::render::chest_points;
+    let mut g = Game::new(640, 360);
+    assert_eq!(g.player.def.sex, Sex::Male);
+    assert_eq!(BodyParams::preset(Sex::Male).chest, 0.0);
+    let j = g.player_joints();
+    assert!(chest_points(&j, &g.player.def.effective_body(&g.gear)).is_none());
+    g.run_cmd(crate::ui::UiCmd::ToggleSex);
+    let b = g.player.def.effective_body(&g.gear);
+    assert!(b.chest > 0.0);
+    // facing the camera: shown; facing away: never drawn (no poke-through)
+    let mut j = g.player_joints();
+    j.fwd = crate::math::v3(std::f32::consts::FRAC_1_SQRT_2, 0.0, std::f32::consts::FRAC_1_SQRT_2);
+    assert!(chest_points(&j, &b).is_some());
+    j.fwd = crate::math::v3(-std::f32::consts::FRAC_1_SQRT_2, 0.0, -std::f32::consts::FRAC_1_SQRT_2);
+    assert!(chest_points(&j, &b).is_none());
+}
+
+fn female_run_trace() -> Vec<f32> {
+    let mut g = Game::new(640, 360);
+    g.run_cmd(crate::ui::UiCmd::ToggleSex);
+    let mut out = Vec::new();
+    let mut i = Input { down: true, right: true, run: true, ..Default::default() };
+    for k in 0..300 {
+        i.dash = k == 100;
+        i.hotkeys = if k == 150 { crate::game::hk_digit(3) | crate::game::hk_digit(4) } else { 0 };
+        g.update(1.0 / 60.0, &mut i);
+        out.push(g.player.chest_spring.x);
+    }
+    let mut i = Input::default();
+    for _ in 0..90 {
+        g.update(1.0 / 60.0, &mut i);
+        out.push(g.player.chest_spring.x);
+    }
+    out
+}
+
+#[test]
+fn chest_spring_bounded_and_settles_at_idle() {
+    use crate::character::ChestSpring;
+    let t = female_run_trace();
+    let peak = t.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(peak > 0.005, "spring should react to the gait ({peak})");
+    assert!(peak <= ChestSpring::MAX + 1e-6);
+    let tail = t[t.len() - 10..].iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    assert!(tail * 44.0 < 0.05, "settles at idle: {} px", tail * 44.0);
+    // a still chest stays exactly at rest
+    let mut s = ChestSpring::default();
+    for _ in 0..100 {
+        s.step(1.2, 1.0 / 60.0, 1.0);
+    }
+    assert_eq!(s.x, 0.0);
+}
+
+#[test]
+fn chest_spring_deterministic_and_armour_damps() {
+    assert_eq!(female_run_trace(), female_run_trace());
+    use crate::character::ChestSpring;
+    let drive = |gain: f32| {
+        let mut s = ChestSpring::default();
+        let mut m = 0.0f32;
+        for k in 0..120 {
+            s.step((k as f32 * 0.4).sin() * 0.03, 1.0 / 60.0, gain);
+            m = m.max(s.x.abs());
+        }
+        m
+    };
+    assert!(drive(0.25) < drive(1.0) * 0.5);
+}

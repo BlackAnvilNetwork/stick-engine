@@ -52,6 +52,41 @@ pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams,
     fb.disc(p(Joint::Head), b.head_r * HEIGHT_PX * b.bone_thickness_mul[Bone::Head as usize], near, ol);
 }
 
+/// Toward-camera direction on the ground plane (depth decreases along it).
+const TO_CAM: (f32, f32) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
+
+/// Chest silhouette cue: two small discs on the upper torso, offset toward
+/// the facing direction. Depth-tested against the body; skipped when the
+/// figure faces away so they can never show through the back. Chest armour
+/// (if any) recolours them as part of the plate.
+pub fn chest_points(j: &Joints, b: &BodyParams) -> Option<[crate::math::Vec3; 2]> {
+    if b.chest <= 0.0 {
+        return None;
+    }
+    let facing = j.fwd.x * TO_CAM.0 + j.fwd.z * TO_CAM.1;
+    if facing < -0.3 {
+        return None;
+    }
+    let (pel, ch) = (j.get(Joint::Pelvis), j.get(Joint::Chest));
+    let base = pel + (ch - pel) * 0.74;
+    let spine_r = b.limb_radius(Bone::Spine) / HEIGHT_PX;
+    let lat = (b.shoulder_w * 0.16).max(b.chest * 0.9);
+    let c = base + j.fwd * (spine_r * 0.9 + b.chest * 0.35) + crate::math::Vec3::UP * j.chest_bounce;
+    Some([c - j.right * lat, c + j.right * lat])
+}
+
+fn draw_chest(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, (lit, shade): (u8, u8), ol: Option<u8>) {
+    let Some(pts) = chest_points(j, b) else { return };
+    let r = b.chest * HEIGHT_PX * b.thickness.sqrt();
+    for p in pts {
+        let q = cam.project(p);
+        // one-shade-darker underside, then the lit disc nudged up: a soft
+        // contour that reads even when drawn over the same-coloured torso
+        fb.disc(q, r, shade, ol);
+        fb.disc(crate::camera::P2 { y: q.y - 0.8, d: q.d - 0.01, ..q }, r - 0.5, lit, None);
+    }
+}
+
 /// Draw a full character: body, then every equipped item.
 pub fn draw_character(
     fb: &mut Framebuffer, cam: &Camera, j: &Joints, def: &CharacterDef, gear: &GearLib, map: &RampMap, o: &DrawOpts,
@@ -59,6 +94,15 @@ pub fn draw_character(
     let b = def.effective_body(gear);
     draw_body(fb, cam, j, &b, map, o);
     let ol = o.outline.then(|| map.color(ColorSlot::Outline, 0));
+    // chest armour recolours the cue as part of the plate
+    let cols = match def.equipped(crate::gear::GearSlot::Chest, gear) {
+        Some(g) => match g.material {
+            Some(r) => { let m = map.with(ColorSlot::Material, r); (m.color(ColorSlot::Material, 3), m.color(ColorSlot::Material, 2)) }
+            None => (map.color(ColorSlot::Body, SHADE_NEAR), map.color(ColorSlot::Body, SHADE_NEAR - 1)),
+        },
+        None => (map.color(ColorSlot::Body, SHADE_NEAR), map.color(ColorSlot::Body, SHADE_NEAR - 1)),
+    };
+    draw_chest(fb, cam, j, &b, cols, ol);
     for s in ALL_GEAR_SLOTS {
         let Some(g) = def.equipped(s, gear) else { continue };
         let m = match g.material {

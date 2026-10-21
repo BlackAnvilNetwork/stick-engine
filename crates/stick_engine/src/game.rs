@@ -286,6 +286,8 @@ impl Game {
         let was = self.player.action;
         let was_hit = self.player.hit_active();
         self.player.step(&self.lib, &self.actions, &it, TICK);
+        let j = self.player_joints();
+        self.player.update_secondary(&j, &self.gear, TICK);
 
         // effects
         let p = self.player.pos;
@@ -335,7 +337,9 @@ impl Game {
     pub fn player_joints(&self) -> rig::Joints {
         let c = &self.player;
         let b = c.def.effective_body(&self.gear);
-        rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway)
+        let mut j = rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway);
+        j.chest_bounce = c.chest_spring.x;
+        j
     }
 
     fn spawn_dust(&mut self, p: Vec3, s: f32) {

@@ -31,6 +31,53 @@ pub struct Windows {
     pub cancel: bool,
 }
 
+/// Damped spring for the chest cue's secondary motion. Driven by the chest
+/// joint's vertical velocity/acceleration; fixed-size, allocation-free and
+/// deterministic (pure function of the joint heights and dt sequence).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChestSpring {
+    /// Vertical displacement (m), positive = up.
+    pub x: f32,
+    pub v: f32,
+    prev_y: f32,
+    prev_vy: f32,
+    primed: u8,
+}
+
+impl ChestSpring {
+    /// Natural frequency (Hz); damping ratio. Settles in ~0.25 s.
+    pub const FREQ: f32 = 5.0;
+    pub const ZETA: f32 = 0.45;
+    /// How strongly the chest's vertical acceleration drives the spring.
+    pub const GAIN: f32 = 1.5;
+    /// Hard bound on the displacement (m); ~1.5 px at 44 px/m.
+    pub const MAX: f32 = 0.035;
+
+    /// Advance one step. `chest_y` = chest joint height, `gain` scales the
+    /// response (armour lowers it).
+    pub fn step(&mut self, chest_y: f32, dt: f32, gain: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        let vy = if self.primed > 0 { (chest_y - self.prev_y) / dt } else { 0.0 };
+        let ay = if self.primed > 1 { (vy - self.prev_vy) / dt } else { 0.0 };
+        self.prev_y = chest_y;
+        self.prev_vy = vy;
+        self.primed = (self.primed + 1).min(2);
+        let w = std::f32::consts::TAU * Self::FREQ;
+        // inertia: the soft mass lags the frame's acceleration (clamped so a
+        // single-tick snap can't kick it)
+        let drive = -(ay * Self::GAIN * gain).clamp(-60.0, 60.0);
+        let a = drive - w * w * self.x - 2.0 * Self::ZETA * w * self.v;
+        self.v += a * dt; // semi-implicit Euler
+        self.x += self.v * dt;
+        if self.x.abs() > Self::MAX {
+            self.x = self.x.clamp(-Self::MAX, Self::MAX);
+            self.v = 0.0;
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Character {
     pub pos: Vec3,
@@ -46,6 +93,8 @@ pub struct Character {
     pub dash_dir: (f32, f32),
     cooldowns: Vec<f32>,
     idle_t: f32,
+    /// Secondary motion for the chest cue.
+    pub chest_spring: ChestSpring,
 }
 
 impl Character {
@@ -54,9 +103,22 @@ impl Character {
             pos: v3(x, 0.0, z), yaw: 0.8, vel: (0.0, 0.0), action: actions.idle, stance: String::new(),
             swing_weight: 1.0, def, anim: Animator::new(), gait: Gait::default(), windows: Windows::default(),
             dash_dir: (1.0, 0.0), cooldowns: vec![0.0; actions.defs.len()], idle_t: 0.0,
+            chest_spring: ChestSpring::default(),
         };
         c.refresh_gear(gear);
         c
+    }
+
+    /// Advance secondary motion from freshly solved joints (call once per
+    /// tick after `step`). Chest armour damps the motion.
+    pub fn update_secondary(&mut self, j: &crate::rig::Joints, gear: &GearLib, dt: f32) {
+        if self.def.body.chest <= 0.0 {
+            self.chest_spring = ChestSpring::default();
+            return;
+        }
+        let armoured = self.def.equipped(crate::gear::GearSlot::Chest, gear).is_some();
+        let gain = if armoured { 0.25 } else { 1.0 };
+        self.chest_spring.step(j.get(crate::rig::Joint::Chest).y, dt, gain);
     }
 
     /// Recompute stance and swing weight after the gear changed.

@@ -55,6 +55,9 @@ pub struct BodyParams {
     pub thickness: f32,
     /// Per-bone thickness multipliers (armour writes here).
     pub bone_thickness_mul: [f32; N_BONES],
+    /// Chest silhouette cue: radius in metres of each of the two small chest
+    /// discs (0 = none). A body parameter, not a rig bone.
+    pub chest: f32,
 }
 
 impl BodyParams {
@@ -64,11 +67,11 @@ impl BodyParams {
         let m = BodyParams {
             height: 0.0, thigh: 0.46, shin: 0.46, upper_arm: 0.30, forearm: 0.28, torso: 0.52,
             neck: 0.08, head_r: 0.13, shoulder_w: 0.40, hip_w: 0.22, limb_px: 2.2, thickness: 1.0,
-            bone_thickness_mul: [1.0; N_BONES],
+            bone_thickness_mul: [1.0; N_BONES], chest: 0.0,
         };
         let b = match sex {
             Sex::Male => m,
-            Sex::Female => BodyParams { head_r: 0.125, shoulder_w: 0.34, hip_w: 0.26, thickness: 0.92, ..m }
+            Sex::Female => BodyParams { head_r: 0.125, shoulder_w: 0.34, hip_w: 0.26, thickness: 0.92, chest: 0.056, ..m }
                 .scaled(1.68 / 1.80),
         };
         BodyParams { height: b.computed_height(), ..b }
@@ -81,7 +84,7 @@ impl BodyParams {
     pub fn scaled(&self, k: f32) -> BodyParams {
         let mut b = *self;
         for v in [&mut b.thigh, &mut b.shin, &mut b.upper_arm, &mut b.forearm, &mut b.torso, &mut b.neck,
-            &mut b.head_r, &mut b.shoulder_w, &mut b.hip_w] {
+            &mut b.head_r, &mut b.shoulder_w, &mut b.hip_w, &mut b.chest] {
             *v *= k;
         }
         b.height = b.computed_height();
@@ -210,6 +213,10 @@ impl CharacterDef {
             let base = lib.index(pick).ok_or_else(|| format!("archetype '{}': unknown gear '{pick}'", a.id))?;
             gear[*slot as usize] = Some(GearRef { base, look_seed });
         }
+        // drawn last so archetypes without the range keep their old results
+        if let Some((lo, hi)) = a.chest_mul {
+            body.chest *= r.range(lo, hi);
+        }
         Ok(CharacterDef { seed, sex, body, colors, personality, gear })
     }
 }
@@ -246,6 +253,9 @@ pub struct Archetype {
     /// Stances this archetype is expected to use (validation/tools).
     #[serde(default)]
     pub stances: Vec<String>,
+    /// Optional multiplier range for `BodyParams::chest` (e.g. (0.85, 1.15)).
+    #[serde(default)]
+    pub chest_mul: Option<(f32, f32)>,
 }
 fn h_m() -> (f32, f32) {
     (1.70, 1.95)

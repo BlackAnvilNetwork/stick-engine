@@ -92,7 +92,7 @@ To tweak an existing move, just edit its `.ron` and rebuild. `AnimLibrary::regis
 - **Shipping binaries means shipping source.** Native executables and **wasm/JS builds served to browsers** are conveying: provide the complete corresponding source (Rust sources, build scripts, `Cargo.toml`/`Cargo.lock`, wasm-bindgen glue) with them or via a written offer (AGPL §6).
 
 ### Always
-- **Keep the notices.** Don't remove or alter copyright lines, license notices or warranty disclaimers.
+- **Keep the notices (AGPL §5).** Don't remove or alter copyright lines, license notices or warranty disclaimers. Every source file starts with a `Copyright (c) 2026 Black Anvil Network` / `SPDX-License-Identifier: AGPL-3.0-or-later` header; keep it (and any third-party notice) and add it to new files with `node scripts/add-license-headers.mjs` (CI checks with `--check`).
 - **Mark modified files** with a prominent notice saying what you changed and when (AGPL §5a).
 - **Derivatives stay AGPL.** You can't relicense modified versions as proprietary.
 - **No extra restrictions** beyond the license (AGPL §10, §12).

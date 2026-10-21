@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Character controller + action state machine.
 //!
 //! Each `Action` maps to an `ActionDef` (clip name, blend time, how it plays).

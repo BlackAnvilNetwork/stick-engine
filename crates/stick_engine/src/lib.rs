@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Stick Engine core: math, CPU pixel raster, stick rig, data-driven animation,
 //! character state machine and a tiny game loop. Platform hosts live in
 //! `stick_web` (wasm) and `stick_native` (winit + softbuffer).

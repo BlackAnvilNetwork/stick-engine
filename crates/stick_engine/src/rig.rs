@@ -1,3 +1,7 @@
+// Copyright (c) 2026 Black Anvil Network
+// SPDX-License-Identifier: AGPL-3.0-or-later
+// Licensed under the GNU Affero General Public License v3.0 or later. See LICENSE.
+
 //! Stick-figure rig: procedural forward kinematics from a `Pose` into 3D
 //! joints, then drawing those joints through a `Camera`.
 use crate::anim::Pose;

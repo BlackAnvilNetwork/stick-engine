@@ -79,3 +79,7 @@ index.html, Trunk.toml web shell
 
 For a new **locomotion** style (e.g. sneak), use `Mode::Loop { ref_speed: <m/s> }` and choose it where Walk/Run are chosen.
 To tweak an existing move, just edit its `.ron` and rebuild. `AnimLibrary::register_ron` also accepts clips at runtime, ready for hot-reload or a future pose editor.
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE).

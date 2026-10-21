@@ -1,0 +1,9 @@
+[package]
+name = "stick_native"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+stick_engine = { path = "../stick_engine" }
+winit = "0.30"
+softbuffer = "0.4"

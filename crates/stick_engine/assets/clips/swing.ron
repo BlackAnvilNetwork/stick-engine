@@ -1,0 +1,16 @@
+// Swing: wind-up over the right shoulder, horizontal slash across the body,
+// follow-through, recover. "hit" event marks the active frames.
+(
+    name: "swing",
+    duration: 0.45,
+    looping: false,
+    base: { "l_hip": 20.0, "l_knee": 20.0, "r_hip": -20.0, "r_knee": 15.0, "l_shoulder": 20.0, "l_elbow": 60.0, "l_arm_out": 25.0 },
+    keys: [
+        (t: 0.0,  pose: { "twist": -10.0, "lean": 5.0,  "r_shoulder": 20.0, "r_elbow": 40.0, "r_arm_out": 20.0, "sword_yaw": 30.0,  "sword_pitch": -40.0 }),
+        (t: 0.12, pose: { "twist": -55.0, "lean": 0.0,  "r_shoulder": 60.0, "r_elbow": 70.0, "r_arm_out": 75.0, "sword_yaw": -120.0, "sword_pitch": 35.0, "bob": -0.02 }),
+        (t: 0.2,  pose: { "twist": 10.0,  "lean": 15.0, "r_shoulder": 85.0, "r_elbow": 10.0, "r_arm_out": 45.0, "sword_yaw": -10.0,  "sword_pitch": 5.0,  "bob": -0.06 }),
+        (t: 0.28, pose: { "twist": 60.0,  "lean": 18.0, "r_shoulder": 70.0, "r_elbow": 15.0, "r_arm_out": 5.0,  "sword_yaw": 95.0,  "sword_pitch": -15.0, "bob": -0.07 }),
+        (t: 0.45, pose: { "twist": 0.0,   "lean": 6.0,  "r_shoulder": 20.0, "r_elbow": 35.0, "r_arm_out": 15.0, "sword_yaw": 30.0,  "sword_pitch": -45.0, "bob": -0.03 }),
+    ],
+    events: [ (t: 0.14, name: "hit_start"), (t: 0.3, name: "hit_end") ],
+)

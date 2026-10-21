@@ -1,0 +1,8 @@
+[package]
+name = "stick_engine"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+ron = "0.8"

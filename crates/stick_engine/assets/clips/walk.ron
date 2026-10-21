@@ -1,0 +1,14 @@
+// Walk: one full stride (left foot forward -> right foot forward).
+// Playback rate is scaled by ground speed (see character.rs ACTIONS).
+(
+    name: "walk",
+    duration: 0.9,
+    looping: true,
+    base: { "lean": 6.0, "r_arm_out": 12.0, "l_arm_out": 10.0, "sword_yaw": 20.0, "sword_pitch": -50.0, "r_elbow": 30.0 },
+    keys: [
+        (t: 0.0,   pose: { "l_hip": 28.0, "l_knee": 4.0, "r_hip": -22.0, "r_knee": 18.0, "l_shoulder": -22.0, "r_shoulder": 24.0, "bob": -0.03 }),
+        (t: 0.225, pose: { "l_hip": 4.0, "l_knee": 6.0, "r_hip": 8.0, "r_knee": 45.0, "l_shoulder": 0.0, "r_shoulder": 6.0, "bob": 0.0 }),
+        (t: 0.45,  pose: { "l_hip": -22.0, "l_knee": 18.0, "r_hip": 28.0, "r_knee": 4.0, "l_shoulder": 22.0, "r_shoulder": -14.0, "bob": -0.03 }),
+        (t: 0.675, pose: { "l_hip": 8.0, "l_knee": 45.0, "r_hip": 4.0, "r_knee": 6.0, "l_shoulder": 0.0, "r_shoulder": 6.0, "bob": 0.0 }),
+    ],
+)

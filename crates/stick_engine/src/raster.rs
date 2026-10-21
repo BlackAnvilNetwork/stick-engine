@@ -9,6 +9,9 @@ use crate::camera::P2;
 /// (shade 0 = darkest).
 pub const RAMP_LEN: usize = 6;
 
+/// Largest radius (px) a projected primitive may reach near the camera.
+pub const MAX_RADIUS: f32 = 160.0;
+
 /// Built-in ramps (0x00RRGGBB, dark -> light). Body, gear and effects refer to
 /// ramps through `RampMap` slots, never to literal indices.
 pub const RAMPS: &[(&str, [u32; RAMP_LEN])] = &[
@@ -114,6 +117,10 @@ impl Framebuffer {
     /// radius `r`, clipped to the circle (`clip`, `clip_r`). Depth is left
     /// untouched; nothing outside existing `from` pixels changes.
     pub fn recolor_disc(&mut self, p: P2, r: f32, clip: P2, clip_r: f32, from: u8, to: u8) {
+        if p.culled() || clip.culled() {
+            return;
+        }
+        let (r, clip_r) = (r * p.s, clip_r * clip.s);
         let (x0, x1) = ((p.x - r).floor() as i32, (p.x + r).ceil() as i32);
         let (y0, y1) = ((p.y - r).floor() as i32, (p.y + r).ceil() as i32);
         for y in y0.max(0)..=y1.min(self.h as i32 - 1) {
@@ -132,7 +139,12 @@ impl Framebuffer {
         }
     }
     /// Thick limb: capsule between a and b with radius r (px) and a 1 px outline.
+    /// Radii are in iso pixels and scale by the projected `s` (focal / z).
     pub fn capsule(&mut self, a: P2, b: P2, r: f32, c: u8, outline: Option<u8>) {
+        if a.culled() || b.culled() {
+            return;
+        }
+        let r = (r * (a.s + b.s) * 0.5).min(MAX_RADIUS);
         let ro = if outline.is_some() { r + 1.0 } else { r };
         let x0 = (a.x.min(b.x) - ro).floor() as i32;
         let x1 = (a.x.max(b.x) + ro).ceil() as i32;
@@ -161,6 +173,10 @@ impl Framebuffer {
     /// Tapered limb: like `capsule` but the radius goes linearly from `ra`
     /// at `a` to `rb` at `b` (thighs, calves, deltoids).
     pub fn cone(&mut self, a: P2, b: P2, ra: f32, rb: f32, c: u8, outline: Option<u8>) {
+        if a.culled() || b.culled() {
+            return;
+        }
+        let (ra, rb) = ((ra * a.s).min(MAX_RADIUS), (rb * b.s).min(MAX_RADIUS));
         let pad = if outline.is_some() { 1.0 } else { 0.0 };
         let rm = ra.max(rb) + pad;
         let x0 = (a.x.min(b.x) - rm).floor() as i32;
@@ -192,6 +208,9 @@ impl Framebuffer {
     }
     /// 1 px Bresenham line with interpolated depth.
     pub fn line(&mut self, a: P2, b: P2, c: u8) {
+        if a.culled() || b.culled() || (a.x - b.x).abs() + (a.y - b.y).abs() > 4096.0 {
+            return;
+        }
         let (mut x0, mut y0) = (a.x as i32, a.y as i32);
         let (x1, y1) = (b.x as i32, b.y as i32);
         let (dx, dy) = ((x1 - x0).abs(), -(y1 - y0).abs());

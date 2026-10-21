@@ -15,11 +15,14 @@ use crate::rig::{Bone, Joint, Joints};
 pub struct DrawOpts {
     /// 1 px outline ring around every limb/gear primitive (on by default).
     pub outline: bool,
+    /// First-person view of this character: draw only arms, hands and
+    /// hand-held gear (the head and torso would sit on the camera).
+    pub first_person: bool,
 }
 
 impl Default for DrawOpts {
     fn default() -> Self {
-        DrawOpts { outline: true }
+        DrawOpts { outline: true, first_person: false }
     }
 }
 
@@ -36,6 +39,12 @@ pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams,
         let (a, z) = bone.ends();
         fb.capsule(p(a), p(z), b.limb_radius(bone) * mul, c, ol);
     };
+    if o.first_person {
+        for (bone, c) in [(Bone::LForearm, far), (Bone::RForearm, near)] {
+            seg(fb, bone, c, 0.9);
+        }
+        return;
+    }
     // far side (left) limbs slightly darker for depth readability
     for (bones, c) in [
         ([Bone::LThigh, Bone::LShin, Bone::LUpperArm, Bone::LForearm], far),
@@ -57,9 +66,6 @@ pub fn draw_body(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams,
     draw_hair(fb, cam, j, b, map.color(ColorSlot::Hair, 3), near, ol);
 }
 
-/// Screen-space direction toward the camera on the ground plane.
-const TO_CAM: (f32, f32) = (std::f32::consts::FRAC_1_SQRT_2, std::f32::consts::FRAC_1_SQRT_2);
-
 /// Hair silhouette in the `Hair` slot. Each part is depth-tested at its own
 /// 3D position, biased behind the face unless the figure faces away, so the
 /// face wins from the front, the hair wins from behind and in profile the
@@ -72,7 +78,9 @@ fn draw_hair(fb: &mut Framebuffer, cam: &Camera, j: &Joints, b: &BodyParams, c: 
     let up = (h - j.get(Joint::Neck)).norm();
     let (f, r) = (j.fwd, j.right);
     let px = |m: f32| m * HEIGHT_PX;
-    let away = j.fwd.x * TO_CAM.0 + j.fwd.z * TO_CAM.1 < -0.3;
+    let tc = cam.to_eye(h);
+    let tl = (tc.x * tc.x + tc.z * tc.z).sqrt().max(1e-4);
+    let away = (j.fwd.x * tc.x + j.fwd.z * tc.z) / tl < -0.3;
     let bias = if away { -0.03 } else { 0.03 };
     // head-local point: (up, fwd, right) in head radii
     let q = |u: f32, fw: f32, rt: f32| h + up * (u * hm) + f * (fw * hm) + r * (rt * hm);
@@ -207,6 +215,9 @@ pub fn draw_character(
     draw_body(fb, cam, j, &b, map, o);
     let ol = o.outline.then(|| map.color(ColorSlot::Outline, 0));
     for s in ALL_GEAR_SLOTS {
+        if o.first_person && !matches!(s, crate::gear::GearSlot::MainHand | crate::gear::GearSlot::OffHand) {
+            continue;
+        }
         let Some(g) = def.equipped(s, gear) else { continue };
         let m = match g.material {
             Some(r) => map.with(ColorSlot::Material, r),

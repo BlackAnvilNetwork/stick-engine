@@ -25,6 +25,9 @@ pub struct Intent {
     pub release: bool,
     /// Where to face for `Face::Aim` actions (world x, z), if known.
     pub aim: Option<(f32, f32)>,
+    /// Keep the current facing while moving (3D camera modes: W/S walk
+    /// forward/back along the facing and the game turns the character).
+    pub keep_facing: bool,
 }
 
 /// Gameplay windows opened/closed by clip events.
@@ -253,7 +256,7 @@ impl Character {
         self.pos.x += self.vel.0 * dt;
         self.pos.z += self.vel.1 * dt;
 
-        if matches!(d.mode, Mode::Gait { .. }) && self.speed() > 0.1 {
+        if matches!(d.mode, Mode::Gait { .. }) && self.speed() > 0.1 && !it.keep_facing {
             let want = self.vel.0.atan2(self.vel.1);
             self.yaw += angle_diff(self.yaw, want) * (dt * 12.0).min(1.0);
         } else if d.is_busy() && d.turn_rate > 0.0 {

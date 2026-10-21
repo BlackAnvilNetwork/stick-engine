@@ -7,7 +7,8 @@ use crate::actions::ActionTable;
 use crate::anim::AnimLibrary;
 use crate::custom::HairOptions;
 use crate::body::{CharacterDef, GearRef, Sex};
-use crate::camera::Camera;
+use crate::camera::{Camera, GroundMap};
+use crate::camrig::{CamConfig, CamMode, CamRig, Subject};
 use crate::character::{Character, Intent};
 use crate::color::RampMap;
 use crate::gear::{GearLib, GearSlot};
@@ -37,7 +38,18 @@ pub struct Input {
     pub hair_style: bool,
     /// Held: cycle hair colour on press (K).
     pub hair_color: bool,
+    /// Held: cycle camera mode iso -> third -> first person on press (V).
+    pub cam_cycle: bool,
+    /// Held: in the 3D camera modes Q / E turn the character (like A / D)
+    /// and R / F pitch the camera up / down.
+    pub look_left: bool,
+    pub look_right: bool,
+    pub look_up: bool,
+    pub look_down: bool,
 }
+
+/// Character turn rate in the 3D camera modes (radians per second).
+pub const TURN_SPEED: f32 = 2.6;
 
 struct Particle {
     p: Vec3,
@@ -67,6 +79,8 @@ pub struct Game {
     pub demo: bool,
     /// Player hair options (style + colour), applied on change.
     pub hair: HairOptions,
+    /// Camera mode, blends and look state (config in `rig.cfg`).
+    pub rig: CamRig,
     rng: u32,
 }
 
@@ -102,8 +116,48 @@ impl Game {
             time: 0.0,
             demo: false,
             hair,
+            rig: CamRig::new(CamConfig::default()),
             rng: 0x1234_5678,
         }
+    }
+
+    /// Apply a camera config; its `mode` takes effect immediately (no blend).
+    pub fn set_cam_config(&mut self, cfg: CamConfig) {
+        self.rig.cfg = cfg;
+        let s = self.subject();
+        self.rig.snap(cfg.mode, &s);
+        self.update_camera(0.0, &Input::default());
+    }
+
+    /// Start a blended switch to `mode`.
+    pub fn set_cam_mode(&mut self, mode: CamMode) {
+        let s = self.subject();
+        let cur = self.cam.effective_view();
+        self.rig.set_mode(mode, &s, cur);
+    }
+
+    fn subject(&self) -> Subject {
+        let j = self.player_joints();
+        Subject { pos: self.player.pos, yaw: self.player.yaw, head: j.get(rig::Joint::Head) }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn subject_for_tests(&self) -> Subject {
+        self.subject()
+    }
+
+    /// Advance only the camera (tests).
+    #[cfg(test)]
+    pub(crate) fn step_camera_for_tests(&mut self, dt: f32) {
+        self.update_camera(dt, &Input::default());
+    }
+
+    fn update_camera(&mut self, dt: f32, inp: &Input) {
+        let s = self.subject();
+        let lp = inp.look_down as i32 as f32 - inp.look_up as i32 as f32;
+        let (w, h) = (self.cam.w, self.cam.h);
+        self.rig.update(dt, lp, &s, self.cam.cx, self.cam.cz, w, h);
+        self.cam.view = self.rig.view;
     }
 
     fn rand(&mut self) -> f32 {
@@ -150,12 +204,30 @@ impl Game {
         if inp.down { sy += 1.0; }
         if inp.left { sx -= 1.0; }
         if inp.right { sx += 1.0; }
-        let mut dir = (sx + sy, sy - sx);
+        let iso = self.rig.mode == CamMode::Iso;
+        let mut keep_facing = false;
+        let mut dir = if iso {
+            (sx + sy, sy - sx)
+        } else {
+            // 3D: A/D and Q/E turn the character (the camera follows its
+            // facing); W/S walk forward/back along the facing.
+            let turn = sx + inp.look_right as i32 as f32 - inp.look_left as i32 as f32;
+            self.player.yaw = crate::math::wrap_angle(self.player.yaw - turn.clamp(-1.0, 1.0) * TURN_SPEED * TICK);
+            keep_facing = true;
+            sx = 0.0;
+            let (sn, cs) = self.player.yaw.sin_cos();
+            (sn * -sy, cs * -sy)
+        };
+        if !iso && (inp.look_left || inp.look_right || inp.left || inp.right) {
+            self.target = None;
+        }
         if sx != 0.0 || sy != 0.0 {
             self.target = None;
         }
         if let Some((mx, my)) = inp.move_click {
-            self.target = Some(self.cam.unproject_ground(mx, my));
+            if let Some(t) = self.cam.pick_ground(mx, my) {
+                self.target = Some(t);
+            }
         }
         if let Some((tx, tz)) = self.target {
             let (dx, dz) = (tx - self.player.pos.x, tz - self.player.pos.z);
@@ -163,6 +235,7 @@ impl Game {
                 self.target = None;
             } else {
                 dir = (dx, dz);
+                keep_facing = false; // turn toward the click target
             }
         }
         let attack_edge = (inp.attack && !self.prev.attack) || inp.attack_click.is_some();
@@ -180,7 +253,8 @@ impl Game {
             run: inp.run,
             request,
             release: false,
-            aim: aim_px.map(|(x, y)| self.cam.unproject_ground(x, y)),
+            aim: aim_px.and_then(|(x, y)| self.cam.pick_ground(x, y)),
+            keep_facing,
         };
         if request.is_some() {
             self.target = None;
@@ -189,6 +263,9 @@ impl Game {
             if inp.hair_style && !self.prev.hair_style { self.hair.cycle_style(1); }
             if inp.hair_color && !self.prev.hair_color { self.hair.cycle_color(1); }
             self.hair.apply(&mut self.player.def);
+        }
+        if inp.cam_cycle && !self.prev.cam_cycle {
+            self.set_cam_mode(self.rig.mode.next());
         }
         self.prev = *inp;
         let was = self.player.action;
@@ -239,6 +316,7 @@ impl Game {
         // camera follow
         self.cam.cx += (p.x - self.cam.cx) * 0.08;
         self.cam.cz += (p.z - self.cam.cz) * 0.08;
+        self.update_camera(TICK, inp);
     }
 
     /// FK joints of the player for the current pose.
@@ -261,10 +339,15 @@ impl Game {
         self.fb.clear_depth();
         let cam = self.cam;
         let pp = cam.project(self.player.pos);
-        self.fb.shadow_ellipse(pp.x, pp.y, 13.0, 6.0, C_SHADOW);
+        let head = self.player_joints().get(rig::Joint::Head);
+        // First person once the eye reaches the head: hide head and torso.
+        let fp = cam.view.and_then(|v| v.eye()).is_some_and(|e| (e - head).len() < crate::camrig::FP_HIDE_RADIUS);
+        if !pp.culled() && !fp {
+            self.fb.shadow_ellipse(pp.x, pp.y, 13.0 * pp.s, 6.0 * pp.s, C_SHADOW);
+        }
         if let Some((tx, tz)) = self.target {
             let t = cam.project(v3(tx, 0.0, tz));
-            let a = |dx: f32, dy: f32| crate::camera::P2 { x: t.x + dx, y: t.y + dy, d: 1e6 };
+            let a = |dx: f32, dy: f32| crate::camera::P2 { x: t.x + dx * t.s, y: t.y + dy * t.s, d: 1e6, s: t.s };
             self.fb.line(a(-5.0, 0.0), a(0.0, -3.0), C_GOLD);
             self.fb.line(a(0.0, -3.0), a(5.0, 0.0), C_GOLD);
             self.fb.line(a(5.0, 0.0), a(0.0, 3.0), C_GOLD);
@@ -280,7 +363,9 @@ impl Game {
         }
         for (x, z) in PILLARS {
             let b = cam.project(v3(x, 0.0, z));
-            self.fb.shadow_ellipse(b.x, b.y, 16.0, 7.0, C_SHADOW);
+            if !b.culled() {
+                self.fb.shadow_ellipse(b.x, b.y, 16.0 * b.s, 7.0 * b.s, C_SHADOW);
+            }
             self.fb.capsule(b, cam.project(v3(x, 2.2, z)), 9.0, shade(R_STONE, 5), Some(C_OUTLINE));
         }
         let j = self.player_joints();
@@ -288,19 +373,26 @@ impl Game {
         if self.flash > 0.0 {
             map = map.flashed();
         }
-        render::draw_character(&mut self.fb, &cam, &j, &self.player.def, &self.gear, &map, &self.opts);
+        let opts = DrawOpts { first_person: fp, ..self.opts };
+        render::draw_character(&mut self.fb, &cam, &j, &self.player.def, &self.gear, &map, &opts);
         for (a, b, _) in &self.trail {
             let (pa, pb) = (cam.project(*a), cam.project(*b));
             self.fb.line(pa, pb, C_TRAIL);
         }
         for q in &self.particles {
             let s = cam.project(q.p);
+            if s.culled() {
+                continue;
+            }
             self.fb.plot(s.x as i32, s.y as i32, s.d, q.c);
             if q.life > 0.2 { self.fb.plot(s.x as i32 + 1, s.y as i32, s.d, q.c); }
         }
     }
 
     fn draw_ground(&mut self) {
+        if let Some(v) = self.cam.view {
+            return self.draw_ground_view(&GroundMap::new(&v));
+        }
         let cam = self.cam;
         let (w, h) = (self.fb.w, self.fb.h);
         // incremental unprojection: ground coords are affine in screen x/y
@@ -328,5 +420,40 @@ impl Game {
                 gz += dzx;
             }
         }
+    }
+
+    /// Ground through the screen->ground homography (one divide per pixel);
+    /// pixels above the horizon or past `FAR` get the sky.
+    fn draw_ground_view(&mut self, g: &GroundMap) {
+        let (w, h) = (self.fb.w, self.fb.h);
+        let st = g.step_x();
+        for y in 0..h {
+            let mut n = g.raw(0.5, y as f32 + 0.5);
+            let row = &mut self.fb.color[y * w..(y + 1) * w];
+            for px in row.iter_mut() {
+                *px = match g.resolve(n) {
+                    None => shade(R_VOID, 0),
+                    Some((gx, gz)) => ground_texel(gx, gz),
+                };
+                n = [n[0] + st[0], n[1] + st[1], n[2] + st[2]];
+            }
+        }
+    }
+}
+
+/// Floor colour at a ground point (shared by the iso and 3D ground passes).
+#[inline]
+fn ground_texel(gx: f32, gz: f32) -> u8 {
+    let (tx, tz) = (gx.floor(), gz.floor());
+    let (fx, fz) = (gx - tx, gz - tz);
+    let hsh = ((tx as i32).wrapping_mul(73856093) ^ (tz as i32).wrapping_mul(19349663)) as u32;
+    let base = if (tx as i32 + tz as i32) & 1 == 0 { shade(R_STONE, 2) } else { shade(R_STONE, 4) };
+    let base = if hsh.is_multiple_of(11) { shade(R_STONE, 1) } else { base };
+    if fx < 0.03 || fz < 0.03 {
+        shade(R_STONE, 1)
+    } else if (hsh >> 8).is_multiple_of(7) && ((fx * 7.0) as i32 + (fz * 5.0) as i32) % 5 == 0 {
+        shade(R_STONE, 5) // pebbles
+    } else {
+        base
     }
 }

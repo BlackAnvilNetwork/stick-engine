@@ -27,6 +27,8 @@ fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
         "ShiftLeft" | "ShiftRight" => i.run = down,
         "Space" => i.dash = down,
         "KeyJ" => i.attack = down,
+        "KeyH" => i.hair_style = down,
+        "KeyK" => i.hair_color = down,
         _ => return false,
     }
     true
@@ -109,7 +111,8 @@ pub fn start() -> Result<(), JsValue> {
         cb.forget();
     }
 
-    let f: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
+    type Frame = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+    let f: Frame = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |ts: f64| {
         {

@@ -1,283 +1,413 @@
 # Stick Engine — Technical Plan
 
-A super-fast, pixel-based game engine in **Rust → WASM** (browser) and native. Every character is a **stick person**, drawn procedurally into a pixel framebuffer. **No sprites, no 3D models.** It supports Diablo-style ARPG play (isometric) and can blend smoothly into a **3D perspective mode** using the same skeleton data.
+A super-fast, pixel-based game engine in **Rust → WASM** (browser) and native. Every character is a **stick person**, drawn procedurally into a pixel framebuffer. **No sprites, no 3D models.** It supports isometric ARPG play and can later blend into a **3D perspective mode** using the same skeleton data.
+
+This file covers **engine-generic** design only. Game-specific content (classes, item rosters, loot-look grammar, networking and server integration) belongs to the games that use the engine. Black Anvil's integration plan lives in BA-Stick as [`docs/STICK-ENGINE-INTEGRATION.md`](https://github.com/BlackAnvilNetwork/BA-Stick/blob/main/docs/STICK-ENGINE-INTEGRATION.md). The engine ships only a small example archetype and example items (sword, greatsword, shield, cuirass) for demos and tests.
+
+License: **GPL-3.0-or-later**.
 
 ---
 
 ## 1. Goals / Non-goals
 
 **Goals**
-- Everything is drawn procedurally into a CPU framebuffer: bones as thick pixel lines/capsules, heads as pixel circles, gear as parametric shapes.
-- 1000+ animated stick characters at 60 fps at a **640×360** internal resolution, integer-upscaled (2× = 720p, 3× = 1080p, 6× = 4K).
+- Everything is drawn procedurally into a CPU framebuffer: bones as thick pixel capsules, heads as discs, gear as shape primitives attached to joints.
+- 1000+ animated stick characters at 60 fps at a **640×360** internal resolution, integer-upscaled.
 - Characters are **~80 px tall** on screen.
 - The same build runs in the browser (wasm32) and natively (Windows/Linux/macOS).
-- ARPG feature set: click-to-move, pathfinding, crowds of enemies, skills, loot, hit effects, particles.
-- Camera modes: isometric 2.5D ↔ full 3D perspective, with a smooth animated transition.
-- **Standalone** engine/game: no Godot integration.
+- ARPG feature set: click-to-move, pathfinding, crowds, skills, loot visuals, hit effects, particles.
+- **Data-driven content**: actions, clips, gear and archetypes are RON files; adding a move needs no Rust change.
+- **Headless-capable core**: the rig (FK), clip metadata, actions, character definitions and the state machine have no drawing or platform dependencies, so tools, tests and game servers can use them.
+- **Pure-function cosmetics**: a character's look is a function of `(seed, archetype)` or an explicit `CharacterDef`, and its animation is a function of the actions it plays. A game can replicate seeds and action events instead of poses.
+- Camera modes: isometric 2.5D now, 3D perspective later.
 
 **Non-goals (for now)**
 - No sprite sheets, texture atlases, or mesh/model importers.
-- No general-purpose editor like Godot/Unity. Tools are small and purpose-built.
-- No networking/multiplayer, no deterministic replays, no mobile target (all explicitly out of scope).
-- No physically-based lighting. The look is palette-driven pixel art.
+- No general-purpose editor. Tools are small and purpose-built.
+- **No networking code in the engine.** Multiplayer is a game-layer concern; the engine provides the deterministic/headless building blocks (§9).
+- No bit-exact simulation determinism. Plain f32; discrete look generation uses integer RNG.
+- No mobile target. No physically based lighting.
 
 ---
 
-## 2. Workspace / crate layout
+## 2. Code layout
+
+Today the engine is one core crate with modules, plus two hosts. The modules are kept separable so they can be split into crates when needed.
 
 ```
-stick-engine/
-  Cargo.toml              (workspace)
-  crates/
-    se_math/      vec2/3/4, mat, quat, fixed-point (I32F32 optional), iso/persp projections
-    se_rig/       skeleton definition, bone hierarchy, character params (proportions, colors, gear)
-    se_anim/      keyframe poses, procedural gaits, 2-bone IK, look-at, ragdoll (verlet), blending
-    se_raster/    framebuffer, z-buffer, line/thick line/circle/capsule/triangle, palette, dithering
-    se_render/    scene → draw list → raster; camera modes + transition; dirty rects; debug overlay
-    se_world/     tilemap/heightmap, procedural tile drawing, navgrid
-    se_sim/       ECS, fixed timestep, movement, pathfinding, combat, skills, loot, particles
-    se_audio/     procedural SFX (simple synth) + playback abstraction
-    se_host_web/  wasm-bindgen/web-sys host: canvas, input, rAF loop, WebGL2 blit
-    se_host_native/ winit + softbuffer/pixels host
-  tools/
-    pose_editor/  (egui) pose and rig-parameter editor; exports RON
+crates/stick_engine/
+  src/
+    math.rs       Vec3, rotate/cross, angle helpers, Pcg32 (integer RNG)
+    anim.rs       Ch-indexed Pose, masks, compose, Clip, ClipMeta, AnimLibrary, Animator      [headless]
+    rig.rs        Joint/Bone enums, Joints, FK solve                                         [headless]
+    body.rs       Sex presets, BodyParams, Personality, CharacterDef, Archetype, from_seed   [headless]
+    gear.rs       GearSlot, GearDef shapes, frames, stance derivation, GearLib               [headless]
+    gait.rs       procedural walk/run generator                                               [headless]
+    actions.rs    ActionTable from actions.ron                                                [headless]
+    character.rs  generic action state machine + windows from clip events                    [headless]
+    color.rs      ColorSlot, RampMap                                                          [palette data]
+    raster.rs     framebuffer, capsule/disc/line, ramp palette + 256 LUT
+    render.rs     draw_body / draw_character (body + gear), DrawOpts (outline)
+    camera.rs     iso projection + ground picking
+    game.rs       demo scene (walk, run, dash, swing, click-to-move)
   assets/
-    palettes/     .hex/.gpl palettes (can be authored in Aseprite)
-    poses/        *.ron keyframe poses
-  examples/       hello_framebuffer, walk_cycle, iso_click_move, arena, mode_switch
+    actions.ron   action table
+    clips/*.ron   animation clips
+    gear/*.ron    example gear
+    archetypes/*.ron  example archetype
+crates/stick_web/     wasm-bindgen host (canvas, input, rAF loop)
+crates/stick_native/  winit + softbuffer host
 ```
 
-Rule: `se_sim` never depends on rendering, so the simulation can run headless (tests, tools).
+"Headless" modules never call raster drawing or camera code. They only use palette *constants* (ramp ids) from `raster`. The planned split is `se_math`, `se_data` (actions/clip meta/gear/archetype loaders), `se_rig`, `se_anim`, `se_raster`, `se_render`, `se_world`, `se_sim`, `se_audio` and hosts, with the same rule: nothing headless depends on rendering.
 
 ---
-
-> **Prototype status (2026-10-20):** the current code is a 3-crate workspace: `stick_engine` (math, raster, rig, anim, character, game), `stick_web` (wasm host) and `stick_native` (winit + softbuffer host). It will split into the `se_*` crates above as it grows. M0 is done and M1 is done plus extras: run, dash, sword swing, procedural iso floor, WASD + right-click move. The web host uses a 2D-canvas `putImageData` blit; the WebGL2 blit comes in M5.
 
 ## 3. Recommended crates
 
 | Need | Crate | Why |
 |---|---|---|
-| Math | `glam` | Fast, SIMD-backed, wasm-friendly. Used for render-side float math. |
-| ECS | `hecs` (start) | Small, archetype storage = cache-friendly SoA-ish iteration, no scheduler magic. Upgrade path: custom SoA for the hot crowd path if profiling demands it. (`bevy_ecs` is heavier than needed.) |
+| Math | `glam` (later) | SIMD, wasm-friendly. The prototype uses a tiny own `Vec3`. |
+| ECS | `hecs` (start) | Small, cache-friendly, no scheduler magic. |
 | WASM glue | `wasm-bindgen`, `web-sys`, `js-sys` | Standard, stable. |
-| Build | `trunk` or `wasm-pack` | `trunk` for a dev server with hot reload. |
-| Native window | `winit` + `softbuffer` | Push a CPU buffer straight to the window with no GPU setup. Alternative: `pixels` (wgpu), which gives scaling shaders for free. |
-| GPU blit / later GPU path | `wgpu` | WebGPU/WebGL2/native from one API. Optional at first; the web host can use raw WebGL2 for the blit. |
-| Pathfinding | `pathfinding` crate (A*, JPS-ish) + a custom flow field | A* for the player; flow fields for crowds. |
-| Spatial queries | custom uniform grid (own code) | Simpler and faster than general trees for uniform ARPG crowds. |
-| RNG | `rand_pcg` / `rand_xoshiro` | Seeded, reproducible procedural generation. |
-| Serialization | `serde` + `ron` | Human-readable clips/poses/params, hot-reloadable. |
-| Audio | `cpal` (native), WebAudio via `web-sys`; maybe `kira` later | Thin abstraction. Procedural SFX keep the "no assets" spirit. |
-| Tools UI | `egui` / `eframe` | Fast immediate-mode tooling, also runs in wasm. |
-| Profiling | `puffin` (+ `puffin_egui`), `tracy-client` native | Frame-level timing. |
-| SIMD | `std::simd` (nightly) or `wide` (stable) | `wide` keeps us on stable Rust; wasm `simd128` target feature on. |
-| Threads (native) | `rayon` | Parallel raster in tiles. Web threads (SharedArrayBuffer) are an optional later step. |
+| Build | `trunk` | Dev server with reload. |
+| Native window | `winit` + `softbuffer` | CPU buffer straight to the window. |
+| GPU blit / later GPU path | `wgpu` | Optional. |
+| Pathfinding | `pathfinding` (A*) + custom flow field | A* for agents; flow fields for crowds. |
+| Spatial queries | custom uniform grid | Simple and fast for uniform crowds. |
+| RNG | own `Pcg32` (in `math`) | Integer state, identical on wasm and native, for look generation. |
+| Serialization | `serde` + `ron` | Human-readable data, hot-reloadable. |
+| Audio | `cpal`, WebAudio | Thin abstraction; procedural SFX. |
+| Tools UI | `egui` / `eframe` | Also runs in wasm. |
+| Profiling | `puffin`, `tracy-client` | Frame-level timing. |
+| SIMD | `wide` + wasm `simd128` | Stable Rust. |
+| Threads (native) | `rayon` | Parallel tile raster. |
 
 ---
 
-## 4. Skeleton / Rig (`se_rig`)
+## 4. Character system
 
-- **Standard stick humanoid**: pelvis (root), spine, neck, head, L/R upper arm, forearm, hand, thigh, shin, foot. 15 bones; extra bones (tail, weapon, cape chain) are allowed.
-- Bone data is SoA: `parent: [u8]`, `length: [f32]`, `local_rot: [Quat]`, `thickness: [u8]`, `color_idx: [u8]`.
-- Joints live in **3D** from day one, even in iso mode. The 2.5D view is just a projection, and that is what makes the 3D mode cheap.
-- **CharacterParams** (serializable, seedable):
-  - Proportions: height, limb length ratios, head radius, shoulder/hip width, limb thickness.
-  - Palette indices: body, outline, accent.
-  - Stance/personality: slouch, gait speed, arm swing.
-  - **Gear as procedural shapes**: a sword is a line plus a crossguard; a shield is a filled circle/polygon; a helmet is a head-circle overlay with a crest line; a cape is a verlet chain; armor is thicker limbs plus an accent color. Items are described by data (shape primitives + palette + attach bone), so loot can generate visual variety for free.
-- Random-character generation from a seed, for crowds of distinct enemies.
+### 4.1 Principles
+- **One skeleton.** Sex, archetype and gear change parameters, never the rig topology.
+- Players, NPCs and crowd enemies all use `CharacterDef` and the same anim/render path.
+- **Colour is always a slot** (`ColorSlot`), resolved to a ramp by a per-draw `RampMap` (§6.3).
+
+### 4.2 Skeleton
+- **16 joints** (`enum Joint`): pelvis, chest, neck, head, l/r_hip, l/r_knee, l/r_foot, l/r_shoulder, l/r_elbow, l/r_hand. `Joints` stores `[Vec3; 16]` indexed by joint, plus the two weapon directions and the body forward/right axes.
+- **13 drawn bones** (`enum Bone`, each with its own thickness multiplier): hips, spine, neck, shoulders, head, l/r_thigh, l/r_shin, l/r_upper_arm, l/r_forearm.
+- Joints are **3D**; the iso view is just a projection.
+- Joint and bone names in RON resolve at load time; unknown names are load errors.
+- Extra bones (tail, cape chain) are planned, not implemented.
+
+### 4.3 CharacterDef & BodyParams
+```rust
+pub struct CharacterDef {
+    pub seed: u64,
+    pub sex: Sex,                         // Male | Female
+    pub body: BodyParams,
+    pub colors: RampMap,                  // base slot -> ramp map
+    pub personality: Personality,         // slouch (deg), gait_speed, arm_swing
+    pub gear: [Option<GearRef>; 9],       // GearRef { base: u16, look_seed: u32 }
+}
+pub struct BodyParams {
+    pub height, thigh, shin, upper_arm, forearm, torso, neck, head_r: f32,
+    pub shoulder_w, hip_w: f32,           // FULL widths (the rig uses half)
+    pub limb_px, thickness: f32,
+    pub bone_thickness_mul: [f32; N_BONES],
+}
+```
+- `effective_body(&GearLib)` multiplies the gear's per-bone `thickness_mul` into the body.
+- `stance(&GearLib)` derives the stance from the hands (§5.5).
+- `swing_weight(&GearLib)` is the main-hand weapon's clip-duration multiplier.
+
+### 4.4 Sex presets (starting values)
+| | Male | Female |
+|---|---|---|
+| height (m) | 1.76 (segment sum) | ≈1.64 (scaled ×1.68/1.80) |
+| shoulder_w (full) | 0.40 | 0.34 |
+| hip_w (full) | 0.22 | 0.26 |
+| thickness | 1.00 | 0.92 |
+| head_r | 0.130 | 0.125 |
+| gait: twist mul / arm mul | 0.8 / 1.0 | 1.2 / 0.9 |
+| gait: hip sway (m) | 0.010 | 0.022 |
+
+The widths are tuned to the prototype's stylised look (big head, narrow hips), not to realistic anatomy. **Readability:** at ~44 px/m, small width differences are 2–3 px, so the sexes must differ mainly through **motion** (twist, hip sway, arm carriage) and silhouette gear. Exaggerate proportions if needed.
+
+### 4.5 Gear
+Gear = shape primitives attached to a joint, in a joint-local frame (metres). Hands use the weapon direction (`r_wpn_*` / `l_wpn_*`) as +y; other joints use the spine axis.
+```ron
+// assets/gear/greatsword.ron
+( id: "greatsword", slot: MainHand, stance: Some("2h"), reach: 1.35, swing_weight: 1.4,
+  material: Some("steel"),
+  shapes: [
+    Capsule(from: (0.0, -0.18, 0.0), to: (0.0, 0.0, 0.0), ramp: Trim, thick: 1.4),
+    Capsule(from: (-0.14, 0.0, 0.0), to: (0.14, 0.0, 0.0), ramp: Trim, thick: 1.2),
+    Capsule(from: (0.0, 0.0, 0.0), to: (0.0, 1.30, 0.0), ramp: Material, thick: 1.6),
+  ], )
+// assets/gear/cuirass.ron
+( id: "cuirass", slot: Chest, material: Some("steel"),
+  thickness_mul: { "spine": 1.45, "l_upper_arm": 1.15, "r_upper_arm": 1.15, "shoulders": 1.2 },
+  shapes: [ Disc(at: Some("l_shoulder"), r: 0.075, ramp: Material), Disc(at: Some("r_shoulder"), r: 0.075, ramp: Material) ], )
+```
+- Primitives: `Line`, `Capsule`, `Disc` (at a joint, or at a frame-local centre). `Poly` and `Arc` are planned.
+- Slots: Head, Shoulders, Chest, Hands, Legs, Feet, Back, MainHand, OffHand.
+- `reach` (length of the striking part) and `swing_weight` (clip duration multiplier) are the only timing-relevant fields. Stats belong to the game.
+- `material` overrides the `Material` slot while that item is drawn.
+- **Loot-look grammars** (mods, rarity → shapes from a look seed) are game content. The engine carries `GearRef::look_seed` for them.
+
+### 4.6 Archetypes & seeds
+`CharacterDef::from_seed(seed, &Archetype, &GearLib)`:
+- The archetype (RON) gives the ranges: sex (fixed or random), height per sex, shoulder/thickness multipliers, personality, accent ramps, and gear choices per slot (`""` = empty).
+- `Pcg32` picks the values. Floats are quantised to 1/1024 steps and slots are visited in a fixed (`BTreeMap`) order, so the same `(seed, archetype)` gives an identical `CharacterDef` on every platform. A tested invariant.
+- A game can therefore replicate a crowd enemy as `(seed, archetype id)`.
+- `assets/archetypes/example_warrior.ron` is the demo/test archetype.
 
 ---
 
-## 5. Animation (`se_anim`)
+## 5. Animation
 
-Layered, all evaluated per character per tick (or every N ticks for far LOD):
+### 5.1 Pose: 19 indexed channels
+`lean, twist, bob, l_hip, l_knee, r_hip, r_knee, l_shoulder, l_elbow, l_arm_out, r_shoulder, r_elbow, r_arm_out, r_wpn_yaw, r_wpn_pitch, l_wpn_yaw, l_wpn_pitch, head, root_pitch`
 
-1. **Keyframe poses**: a few hand-authored key poses per action (idle, attack wind-up/strike/recover, cast, hit, death), stored as RON joint rotations and interpolated with slerp plus easing curves.
-2. **Procedural locomotion**: walk/run cycles driven by velocity (phase = distance travelled / stride), with sinusoidal hip bob, counter-swinging arms, and lean into acceleration. There is no walk "clip"; it is all parametric, so speed and proportions just work.
-3. **2-bone IK**: feet planted on the terrain height and hands on weapon/target; analytic solve (cheap). Look-at for the head.
-4. **Additive layers**: hit flinch, breathing, aim offset.
-5. **Ragdoll**: on death or knockback, hand the joints to a Verlet particle system with distance constraints and ground collision; blend back to animation on get-up. A few iterations per tick is enough at this scale.
-6. **Blending**: per-layer weights, crossfades, and masks (upper body vs lower body, so you can attack while running).
+These are degrees, except `bob` (metres).
+- `Pose` is `[f32; 19]` addressed by `Ch` enum index. Names are resolved only when a clip loads.
+- `r_wpn_*` (formerly `sword_*`) and `l_wpn_*` aim the right and left hand items, for dual-wield and off-hand items.
+- `root_pitch` rotates the **whole body** about the pelvis's right axis (rolls, knockdowns, get-ups), and the body is lifted to stay above ground. `lean` only bends the spine.
+- Inside a clip, keys interpolate linearly, so a clip may sweep 0→360. **Cross-fades use the shortest arc**, and the cross-fade source is wrapped to (−180, 180], so leaving a roll never spins back.
 
-**LOD**: near characters update every tick with IK; mid characters skip IK; far characters update every 2–4 ticks with a cheaper gait.
+### 5.2 Layers and masks
+Masks are `u32` channel bitsets with presets:
+- `LOWER` = bob, hips, knees
+- `UPPER` = twist, shoulders, elbows, arm_out, all weapon channels
+- `SHARED` = lean, head. Layers *add* on these.
+- `FULL` = everything
+
+A clip declares `mask: Upper | Lower | Full | Additive` (default `Upper`).
+
+| Layer | Source |
+|---|---|
+| 1. Base | gait generator while moving, blended with the stance's idle clip when slow |
+| 2. Action | the current action's clip, composed by its mask (`Full` replaces the base) |
+| 3. Additives | fire-and-forget additive clips (flinch, …) added on top |
+| 4. IK / ragdoll | planned |
+
+Every action change cross-fades from the last output pose over the action's `blend` time.
+
+### 5.3 Gait generator
+Walk/run are procedural (`gait.rs`); there are no walk/run clips.
+```
+leg = thigh + shin;  Fr = v² / (g·leg);  w = smoothstep(0.6, 1.5, Fr)   // walk 0 .. run 1
+stride = leg · lerp(1.3, 2.2, w);  phase += dist · gait_speed / stride
+hip = lerp(25, 50, w) · sin(2πφ) (right +π);  knee = lerp(8, 70, w) · max(0, cos(2πφ + 0.6)) + 5
+shoulder = −0.7 · hip · arm_swing · sex.arm_mul;  elbow = 15 + 60w
+bob = lerp(0.015, 0.05, w) · cos(4πφ) − 0.02;  twist = (4 + 6w) · sex.twist_mul · sin(2πφ)
+lean = 2 + 10w + 4 · clamp(accel/10, −1, 1) + slouch;  hip sway = sex.hip_sway · sin(2πφ)
+```
+The thresholds (0.6, 1.5) keep 2.2 m/s a walk (Fr ≈ 0.54) and 5.2 m/s a full run (Fr ≈ 3.0) for every preset leg length. The patch's (0.35, 0.65) would have turned the walk into a jog. Planned: sprint/sneak/strafe variants, foot-plant IK, breathing additive.
+
+### 5.4 Clip schema v2
+```
+name, duration, looping, base, keys, events        // as before
+mask: Upper | Lower | Full | Additive              (default Upper)
+speed_scale: f32                                   (default 1.0)
+hold: Some((t0, t1))                               loop inside until released
+stance: Some("2h")                                 metadata
+events: hit_start/hit_end, iframes_start/iframes_end, cancel_open/cancel_close,
+        release, commit, footstep, fx_*, sfx_*
+```
+- Unknown channels, unknown events (except `fx_`/`sfx_`) and unpaired start/end events are load errors.
+- **Events are the source of truth for gameplay timing.** The state machine opens and closes `hit`, `iframes` and `cancel` windows from them, for any action.
+- **`ClipMeta::from_ron`** parses only the timing fields (keys and base are skipped). It's meant for headless consumers (tools, validators, a game server that needs hit timings). It is protocol-agnostic.
+
+### 5.5 Stances and lookup
+- The stance is derived from the hands: none → `unarmed`; 1h + shield → `1h_shield`; 1h + 1h → `dual`; otherwise the main-hand stance (`1h`, `2h`, `staff`, …).
+- Clip lookup for `(action, stance)`: `stances[stance]` → `stances["any"]` → *unavailable* (the action can't start).
+
+### 5.6 Built-in clips (demo)
+`idle` (Full), `dash` (Full), `swing` (Full, hit + cancel windows), `dodge_roll` (Full, root_pitch 0→360, i-frames), `hit_flinch` (Additive).
 
 ---
 
-## 6. Renderer (`se_raster` + `se_render`)
+## 6. Renderer
 
 ### 6.1 Framebuffer
-- **Decision: internal 640×360.** At 80 px a figure is ~22% of screen height, close to Diablo II framing, with ~20×11 m of visible floor. 480×270 made 80 px figures fill 30% of the screen (too zoomed in); 960×540 quadruples raster cost per frame for little gain and only scales 2× to 1080p. 640×360 scales cleanly by integers to 720p/1080p/1440p/4K. **Indexed 8-bit color** (`u8` palette index) plus a depth buffer (f32 in the prototype; 16-bit later if bandwidth matters). Small buffers mean the whole frame stays in L2 cache, which is very fast.
-- At present time the buffer is converted through the palette to RGBA (a 256-entry LUT) and blitted.
+640×360, `u8` palette index + f32 depth. Present converts through a **256-entry LUT** (`raster::LUT`).
 
-### 6.2 Primitives (all integer, clipped, z-tested)
-- **Lines**: Bresenham; **thick lines/limbs**: capsule raster (distance-to-segment over the bbox, or span-based scanline for speed). Each limb is a capsule with depth interpolated along the bone.
-- **Circles / discs** (heads, shields, particles): midpoint circle, filled spans.
-- **Triangles / polygons**: scanline with z (for 3D mode terrain/props, gear shapes).
-- **Outlines**: optional 1-px outline pass with a depth-discontinuity edge detect, which gives the classic crisp pixel look.
-- **Point splats**: for particles and voxel-ish effects.
+### 6.2 Primitives
+Capsules (distance-to-segment, span version planned), discs, Bresenham lines, shadow ellipses. Triangles/polys are planned (gear `Poly`, 3D terrain).
 
-### 6.3 Palette & look
-- Palettes are 16–64 colors, loaded from `.gpl`/`.hex`. **Aseprite (CLI installed) can author/export palettes** and reference mockups, never sprites. Example: `aseprite -b palette.aseprite --save-as palette.gpl` (or a Lua script export).
-- Shading by **palette ramps** (index + light level → index) and **ordered (Bayer) dithering** for gradients, fog, and fake lighting.
-- Palette swaps for hit flash (all white for 2 frames), elemental tints, team colors, and day/night.
+### 6.3 Ramps, slots and RampMap
+- Palette = ramps of `RAMP_LEN = 6` shades; index = `ramp × 6 + shade`.
+- There are 14 built-in ramps: void, stone, bone, blood, steel, gold, leather, dust, arcane, white, fire, ice, team_blue and team_green. The LUT has room for 42.
+- `.gpl` loading from Aseprite is planned.
+- Bodies and gear reference `ColorSlot`s: Body, BodyFar, Outline, Accent, Material, Trim, Glow.
+- `RampMap { ramps: [u8; 7], flash }` resolves a slot to a ramp per draw:
+  - `team(r)` overrides Accent.
+  - `tint(r)` overrides Body and BodyFar (elemental tint).
+  - `flashed()` sends every slot except Outline to `white` (hit flash).
+- Planned: Bayer dither shading, day/night and fog as LUT transforms.
 
-### 6.4 Upload / present
-- **Web**: one WebGL2 texture `texSubImage2D` per frame plus a fullscreen quad with nearest filtering and integer scaling (letterboxed). Fallback: `putImageData` on a 2D canvas.
-- **Native**: `softbuffer` (CPU scaling) or `pixels` (GPU scaling).
-- **Dirty rects**: optional for UI/menus. In gameplay the whole small frame is redrawn (cheap), and dirty-rect tracking is used for the static terrain layer cache (see 7).
+### 6.4 Outline
+**On by default** (`DrawOpts::outline`). Every capsule/disc writes a 1 px ring in the Outline slot at a slightly deeper depth, which separates overlapping limbs at no extra cost. A depth-edge post pass is optional later (props/3D).
 
-### 6.5 Draw pipeline
-`sim snapshot → interpolate (alpha) → per-character pose → project joints (camera) → build draw list (capsules/circles/polys with depth) → bin into screen tiles (e.g. 32×32) → raster tiles (parallel natively) → post (outline, flash, dither fog) → UI overlay → present`.
+### 6.5 Upload / present
+- Web: `putImageData` today, WebGL2 blit planned.
+- Native: softbuffer with integer scaling.
 
-Tile binning makes it SIMD/threads-friendly and keeps work local.
-
-### 6.6 Optional GPU path (later)
-Same draw list, but instanced capsules/circles via SDF fragment shaders in `wgpu` into a low-res render target. It is only needed if CPU limits are hit (e.g. 3D mode at higher resolutions).
+### 6.6 Draw pipeline
+`sim → per-character layered pose → rig::solve (headless) → render::draw_character (project + body + gear via RampMap) → particles/trails → present`. Tile binning and parallel raster are planned.
 
 ---
 
-## 7. Camera modes & transition
+## 7. Camera modes
+- **Iso 2.5D**: 2:1 dimetric, ground picking (`unproject_ground`).
+- **3D perspective** (planned): the same joints and capsules, radius scaled by 1/z, with an ortho→persp dolly-zoom transition. Gameplay stays on the ground plane.
 
-- **Iso 2.5D**: orthographic projection with a classic 2:1 dimetric angle (about 26.565° pitch, 45° yaw). Integer-snapped camera position for stable pixels.
-- **Full 3D**: perspective with a free/orbit/chase camera. The same joints and the same capsule raster, with radius scaled by 1/z.
-- **Transition**: interpolate the projection matrix `P(t) = lerp(ortho, persp)` with a matched-FOV dolly (dolly-zoom trick: increase the FOV while pulling the camera in, so the framing stays constant), plus pitch/yaw lerp. 0.5–1.0 s, eased. Because everything is already 3D data, nothing pops.
-- **World in 3D**: the tilemap heightmap becomes triangles (flat-shaded with palette ramps). Walls are extruded tiles. Optional voxel-column mode for a chunky retro look.
-- Gameplay stays on the ground plane (XZ) in both modes, so the sim is unaffected by the camera.
+## 8. World
+1 m tile grid with height and material, procedurally generated and drawn (today: procedural iso floor). Planned: dungeon generator, static terrain cache, navgrid.
 
----
-
-## 8. World (`se_world`)
-
-- Tile grid (e.g. 1 m tiles) with height and material ID, generated procedurally (noise + room/corridor dungeon generator, Diablo-style).
-- Tiles are drawn procedurally: palette-ramped diamonds with dithered noise patterns, edge outlines, procedural props (rocks = polygons, torches = line + flickering particle, grass = pixel tufts).
-- **Static terrain cache**: in iso mode, pre-raster terrain into a larger cached layer (color + depth) and blit the visible window. Re-raster only dirty chunks. In 3D mode, terrain is rasterized each frame (frustum-culled chunks).
-- Navgrid derived from tiles (walkable flags, costs).
-
----
-
-## 9. Simulation (`se_sim`)
-
-- **Fixed timestep**: 60 Hz sim (or 30 Hz with render interpolation; decide in M5), with an accumulator loop. Rendering interpolates between the previous and current state.
-- **ECS (hecs)** components: `Transform`, `Velocity`, `Rig(params handle)`, `AnimState`, `Health`, `Faction`, `Ai`, `PathAgent`, `Skills`, `Loot`, `Projectile`, `Particle` (particles may live outside ECS in a pure SoA pool for speed).
-- **Input**: platform hosts translate events into an `InputFrame` (mouse world position via inverse projection, buttons, keys). 
-- **Click-to-move**: screen → ground-plane raycast (works in both modes) → A* on the navgrid → path smoothing (string-pulling) → steering.
-- **Crowds**: flow-field toward the player (recomputed only when the player changes tile), local separation via the uniform spatial grid, and simple avoidance. This scales to thousands.
-- **Combat/ARPG**:
-  - Melee hit = arc/capsule test against enemy hit capsules (derived from bones, so the hitbox matches the stick body).
-  - Skills are data-driven (RON): cooldown, cost, shape (cone, circle, projectile, chain), effects (damage, knockback → ragdoll, status).
-  - Hit feedback: palette flash, hit-stop (2–4 frame freeze), screen shake (integer pixels), number pop-ups (pixel font rendered procedurally from a tiny bitmap font defined in code), particles.
-  - Loot: seeded drop tables → items with affixes; the item's visual = procedural gear shapes (see Rig). Ground loot drawn as a glinting shape + label.
-- **Particles**: SoA pool (pos, vel, life, color ramp), up to about 20k, rendered as 1–2 px points/short streaks with additive palette-ramp stepping. Blood/sparks/magic/dust.
-- **Audio**: procedural SFX (noise bursts, pitched blips, swooshes) generated at load time into buffers; event-triggered from the sim via an event queue (decoupled from the sim).
-
----
+## 9. Simulation (generic)
+- Fixed 60 Hz timestep in the demo, with an accumulator.
+- `Character::step(lib, actions, intent, dt)` is a generic state machine. `Intent { dir, run, request: Option<action id>, release, aim }`.
+  - Busy actions (OneShot/Cast) block other requests outside their **cancel window**.
+  - Requesting the same action inside the window starts its `chain`.
+  - `Cast` holds inside the clip's `hold` range until `release`.
+  - Per-action `cooldown`, `move_mult`, `turn_rate`, `face` (Keep/Move/Aim), and `root_motion: Dash{speed}`.
+  - Weapon actions scale their duration by `swing_weight`.
+- **Building blocks for multiplayer games** (no protocol in the engine):
+  - headless FK
+  - `ClipMeta` timings
+  - deterministic `from_seed`
+  - cosmetics as a pure function of `(CharacterDef, action, start time)`
+- Planned: ECS, pathfinding, crowds (flow fields), combat helpers (e.g. hit sectors baked from clip sweeps), particles pool, procedural audio.
 
 ## 10. Hosts
-
-- **Web (`se_host_web`)**: `wasm-bindgen` entry, a `requestAnimationFrame` loop, `web-sys` for canvas/WebGL2/pointer/keyboard/WebAudio, and a resize → integer scale calculation. Build with `trunk`, release with `wasm-opt -O3`, and `RUSTFLAGS="-C target-feature=+simd128"`. Target a wasm binary under about 1 MB gzipped.
-- **Native (`se_host_native`)**: `winit` event loop + `softbuffer`, with `rayon` tile raster.
----
+- Web: wasm-bindgen + rAF + canvas, built with `trunk`.
+- Native: winit + softbuffer.
+- Both consume `Game`, `Input` and the LUT.
 
 ## 11. Performance budget
+Target: 1000+ characters at 60 fps at 640×360 in single-threaded wasm.
 
-Target: **1000+ characters, 60 fps, 640×360**, mid-range laptop, in the browser (single-threaded wasm).
-
-| Stage | Budget (ms) |
+| Stage | ms |
 |---|---|
-| Sim (AI, movement, combat, 1000 agents) | 3.0 |
-| Animation (1000 rigs × 15 bones, LOD) | 3.0 |
-| Projection + draw list + binning | 1.5 |
-| Raster (terrain blit + ~15k capsules + particles) | 5.0 |
-| Post + palette convert + upload | 1.5 |
-| Headroom | 2.6 |
-| **Total** | **16.6** |
+| Sim | 3.0 |
+| Animation (layered, LOD) | 3.0 |
+| FK + projection + draw list | 2.0 |
+| Raster | 5.5 |
+| Post + LUT + upload | 1.5 |
+| Headroom | 1.6 |
 
-Techniques:
-- SoA everywhere on hot paths; `u8` indexed color halves or quarters memory bandwidth vs RGBA.
-- Integer raster with span fills, early bbox cull, and depth-sorted coarse rejection.
-- **Pixel-size LOD**: at 80 px, near characters use full capsules; when zoomed out or in 3D distance a character ~20 px tall renders limbs as 1-px lines (Bresenham) instead of capsules; very far ones become a 3–5 px "glyph" drawn from a cached mini-pose.
-- Skip animation updates for off-screen characters (sim still runs).
-- `simd128` for palette conversion, clears, and batch transforms.
-- Zero allocations per frame (arena / reused Vecs); verified with a counting allocator in debug.
-- Native: `rayon` across tiles. Web: optional threads later (needs COOP/COEP headers).
-- Benchmarks: `criterion` microbenches for raster primitives, plus an in-engine stress scene with a frame-time graph.
-
----
+Techniques: index-addressed channels/joints (no strings on hot paths), SoA, span fills, pixel-size LOD, skipping off-screen animation, `simd128`, zero per-frame allocation.
 
 ## 12. Tooling
+- Debug overlay (planned).
+- Pose editor: drag joints, timeline, event markers, mask picker, RON export, hot-reload via `AnimLibrary::register_ron`.
+- Character lab: CharacterDef sliders, seed randomiser, gear try-on, RampMap preview.
+- Data validator: every action's clips exist (a test today).
 
-- **Debug overlay** (toggle F1): FPS, frame-time graph, per-stage timings (puffin), entity counts, bone/joint gizmos, navgrid/path/flow-field visualization, hit capsules, z-buffer view, dirty-chunk view.
-- **Pose editor** (`tools/pose_editor`, egui, runs native and in the browser): drag joints (IK-assisted), timeline of key poses, easing curves, live preview of proportions/params, export RON. Hot-reload poses into the running game.
-- **Character lab**: sliders for CharacterParams + seed randomizer; export presets.
-- **Palette pipeline**: author in Aseprite → export `.gpl` via CLI script → engine hot-reloads.
-
----
-
-## 13. Milestone roadmap
-
-### M0 — Workspace + wasm hello framebuffer
-- Cargo workspace, crates stubbed, CI (fmt, clippy, test, wasm build).
-- Web host: 640×360 indexed buffer, palette, animated test pattern, integer upscale. Native host the same.
-- **Accept**: `trunk serve` shows the pattern in Chrome/Firefox at 60 fps; `cargo run -p se_host_native` shows the same; frame time under 1 ms for clear + convert + present; CI green.
-
-### M1 — Stick figure rig + walk cycle
-- `se_rig` humanoid, `se_anim` procedural walk/run/idle, thick-line/capsule/circle raster with z-buffer, outline pass.
-- **Accept**: one figure walks in place with adjustable speed and proportions (sliders in the debug UI); 3 random-seeded figures look distinct; no pixel shimmer when standing still; raster microbenchmarks recorded.
-
-### M2 — Iso world + click-to-move
-- Procedural tile dungeon, terrain cache, iso camera with follow, screen→ground picking, A* + smoothing, foot IK on height.
-- **Accept**: clicking anywhere walkable moves the player along a sensible path around walls; feet don't slide (stride matches speed); 200 wandering NPCs at 60 fps in the browser.
-
-### M3 — Combat (ARPG core)
-- Enemies with flow-field chase + separation, melee + 2 skills (cone, projectile), hit capsules, health, hit-stop/flash/shake, particles, death ragdoll, loot drops with procedural gear that changes the player's look, procedural SFX.
-- **Accept**: a 5-minute "arena" loop is fun to play; 500 enemies chasing at 60 fps (web); a picked-up sword visibly appears on the player.
-
-### M4 — 3D mode
-- Perspective camera, terrain-to-triangles, depth-scaled capsules, iso↔3D transition (hotkey), picking in 3D.
-- **Accept**: pressing Tab transitions over about 0.75 s with no popping; gameplay (click-to-move, combat) works in both modes; 300 characters at 60 fps in 3D (web).
-
-### M5 — Performance & polish
-- LOD tiers, SIMD, zero-alloc audit, native threading, palette effects (day/night, fog dithering), pose editor v1.
-- **Accept**: **1000+ characters at 60 fps at 640×360 in the browser** in the stress scene (iso), with a documented frame breakdown; wasm under 1 MB gzipped; pose editor can author and hot-reload an attack.
-
-Later: GPU SDF path, more body plans (quadruped sticks), level editor.
-
----
+## 13. Milestones
+- **M0** workspace + wasm framebuffer ✅
+- **M1** rig + walk ✅ (plus run, dash, swing, iso floor, WASD/right-click)
+- **M2** character & animation core ✅ on branch `engine-upgrade-character-anim`: 19-channel indexed pose, shortest-arc blending, masks/layers, clip schema v2, ClipMeta, headless rig, root_pitch, CharacterDef/presets/archetypes, gear + stances, actions.ron, gait, ramp palette + RampMap, outline toggle. *Remaining:* M/F readability A/B, breathing additive, Poly/Arc shapes, extra bones/capes, `.gpl` loading, crate split.
+- **M3** iso world + click-to-move: dungeon gen, terrain cache, A*, foot IK. Accept: 200 NPCs at 60 fps (web).
+- **M4** combat helpers: flow-field crowds, hit tests from clip windows + weapon reach, hit-stop/flash/shake, particles, ragdoll. Accept: 500 chasing enemies at 60 fps (web).
+- **M5** performance & polish: LOD, span raster, SIMD, WebGL2 blit, dither/fog, pose editor v1. Accept: 1000+ characters at 60 fps (web).
+- **M6** 3D mode (optional view).
 
 ## 14. Risks
-
 | Risk | Mitigation |
 |---|---|
-| Single-threaded wasm CPU raster misses the 1000-character target | Pixel-size LOD, glyph impostors, 30 Hz anim for distant characters; GPU SDF fallback path is designed in from the start. |
-| Stick figures read poorly (thin limbs) | Outline pass, team-color accents, exaggerated poses, test readability in M1. |
-| Iso↔3D transition looks odd (pixel sizes change, swimming) | Dolly-zoom matching, pixel-snapped camera, stick to ground-plane gameplay. |
-| Procedural animation feels floaty | Key poses for actions, plus IK foot planting and hit-stop. Budget polish time in M3. |
-| Scope creep toward a general engine | Purpose-built; each milestone ships a playable example. |
-| OneDrive syncing `target/` (huge, slow) | Put the build dir outside OneDrive (`CARGO_TARGET_DIR=C:\Users\raxac\cargo-target\stick-engine`) or exclude `target/` from sync. |
+| wasm CPU raster misses 1000 chars | LOD, glyph impostors, GPU SDF fallback |
+| Thin limbs read poorly | Outline on by default, accent ramps, big heads |
+| M/F unreadable at 80 px | Motion cues (twist, hip sway), silhouette gear, exaggeration |
+| Clip budget explodes with stances | `any` fallbacks first, procedural locomotion |
+| Data typos | Load-time validation of channels, events, joints, bones, ramps, action refs |
+| Procedural motion feels floaty | Key-posed actions, IK, hit-stop |
+| OneDrive syncing `target/` | `CARGO_TARGET_DIR` outside OneDrive |
+
+## 15. Decisions (2026-10-21)
+1. Standalone engine, no Godot.
+2. Plain f32 sim; integer RNG for look generation; no bit-exact replays.
+3. ~80 px characters at 640×360.
+4. No networking inside the engine; it stays protocol-agnostic. Mobile is out of scope.
+5. One skeleton; 19 indexed channels including `root_pitch`; shortest-arc cross-fades.
+6. Animation keyed by (action, stance) with `stance → any → unavailable`.
+7. Actions are data (`actions.ron`).
+8. Colour is always a slot → ramp via `RampMap`; outline on by default.
+9. Rig maths is headless; drawing lives in `render`.
+10. License GPL-3.0-or-later.
+
+## 16. Animation system: data-driven actions
+`assets/actions.ron` replaces `enum Action` + `ACTIONS`:
+```ron
+[
+    (id: "idle", mode: Idle, blend: 0.15, stances: { "any": "idle" }),
+    (id: "walk", mode: Gait(speed: 2.2), blend: 0.15),
+    (id: "run", mode: Gait(speed: 5.2), blend: 0.12),
+    (id: "dash", mode: OneShot(next: "idle"), blend: 0.04, stances: { "any": "dash" },
+        move_mult: 0.0, root_motion: Some(Dash(speed: 13.0)), cooldown: 0.45, face: Move),
+    (id: "swing", mode: OneShot(next: "idle"), blend: 0.05, stances: { "any": "swing" },
+        move_mult: 0.2, face: Aim, weapon: true),
+    (id: "dodge", mode: OneShot(next: "idle"), blend: 0.03, stances: { "any": "dodge_roll" },
+        move_mult: 0.0, root_motion: Some(Dash(speed: 7.0)), cooldown: 0.6, face: Move),
+    (id: "flinch", mode: Additive, blend: 0.0, stances: { "any": "hit_flinch" }),
+]
+```
+- Modes: `Idle`, `Gait{speed}`, `OneShot{next}`, `Cast{next}`, `Additive`.
+- `idle`, `walk` and `run` are required. References (`next`, `chain`) are validated.
+- **Adding a move = one clip file + one row.** Built-in clips are currently embedded with `include_str!`; runtime loading uses `AnimLibrary::register_ron` / `ActionTable::from_ron`.
+
+## 17. Open questions
+1. Art direction: dark gothic stone + bone-white figures, outline on (decided).
+2. 3D mode: optional view (decided).
+3. Strafe/aim: free-facing upper body (twist follows aim, ±70°) recommended; not implemented yet.
+4. Dual-wield: done at channel level (`l_wpn_*`); dual clips still to author.
+5. Directory-based asset discovery vs embedded bundle for web: open.
+
+## 18. Implementation status vs earlier findings
+| Finding | Status |
+|---|---|
+| String channel lookup on hot paths | ✅ `Ch` indices |
+| Linear degree cross-fades (360→0 spin) | ✅ shortest arc + wrapped source |
+| Rolls via `lean` (legs ignore it, head inverts) | ✅ `root_pitch`; head relative to spine |
+| Half-width naming | ✅ full widths in `BodyParams` |
+| 16-colour palette, `& 15` | ✅ ramp model + 256 LUT |
+| FK mixed with drawing | ✅ `rig` (headless) / `render` |
+| Single-clip animator | ✅ base + action + additive layers with masks |
+| Uninterruptible OneShots | ✅ cancel windows from clip events |
+| `hit_active` tied to Swing | ✅ windows from events for any action |
+| Hard-coded walk/run clips | ✅ gait generator |
+| Speeds as consts | ✅ `Gait{speed}` rows in actions.ron |
 
 ---
 
-## 15. Decisions (answered 2026-10-20)
+## Reconciliation notes
 
-1. **Standalone.** No Godot integration.
-2. **No deterministic mode / replays.** Plain f32 sim with a fixed timestep.
-3. **Characters ~80 px tall**, so the internal resolution is 640×360 (see 6.1).
-4. **Mobile and multiplayer are out of scope.**
-5. 3D mode design is kept (section 7) and scheduled for M4.
+The 2026-10-21 Character/Gear/Animation patch was split between this file and BA-Stick's integration doc.
 
-## 16. Animation system (implemented in M1 prototype)
-
-- **Pose** = 16 named channels (`lean, twist, bob, l_hip, l_knee, r_hip, r_knee, l_shoulder, l_elbow, l_arm_out, r_shoulder, r_elbow, r_arm_out, sword_yaw, sword_pitch, head`), in degrees except `bob` (metres).
-- **Clip** = RON file in `crates/stick_engine/assets/clips/`: `name`, `duration`, `looping`, optional `base` pose, `keys: [(t, pose:{channel: value})]`, optional `events: [(t, name)]` (e.g. `hit_start`/`hit_end` active frames). Missing channels inherit from `base`. Keys are smoothstep-interpolated; looping clips wrap.
-- **AnimLibrary** registers clips (built-ins via `include_str!`, or `register_ron` at runtime for hot-reload).
-- **Animator** plays one clip with cross-fade from the previous output pose.
-- **State machine** (`character.rs`): `Action` enum + `ACTIONS` table mapping each action to clip, blend time and mode (`Loop{ref_speed}` scales playback rate by ground speed; `OneShot{next}` is uninterruptible and returns to `next`).
-- Adding a move = clip file + `BUILTIN_CLIPS` line + `Action` variant + `ACTIONS` row + trigger in `Character::step`. See README.
-
-## 17. Open questions
-
-1. Art direction: palette mood (current: dark gothic stone + bone-white figures), outlines on/off.
-2. Should 3D mode be fully playable or a cinematic/alternate view?
-3. Which moves next (block, combo chain, bow, spells, dodge-roll)?
-4. License / open source?
+| Patch item | Where | Outcome |
+|---|---|---|
+| One skeleton, params only | engine §4.1 | Adopted |
+| (Action, stance) → clip with fallback | engine §5.5 | Adopted (`stance → any → unavailable`) |
+| actions.ron replaces enum Action | engine §16 | Adopted and implemented |
+| Cosmetics as pure functions of seeds/events | engine §1, §9 | Adopted as a generic property; replication is game-side |
+| Outline on by default | engine §6.4 | Improved: per-primitive ring (cheap, separates limbs) |
+| Colour = ramp slot | engine §6.3 | Adopted |
+| RampMap([u8;16]) | engine §6.3 | Improved: a 7-slot map is smaller and expresses team/tint/flash directly |
+| CharacterDef / BodyParams / Slot | engine §4.3 | Adopted; explicit full widths; `GearRef{base, look_seed}` |
+| Sex presets | engine §4.4 | Improved: widths tuned to the prototype look; head 0.130/0.125 |
+| Gear primitives on bones | engine §4.5 | Adopted (Line/Capsule/Disc now; Poly/Arc planned) |
+| reach / swing_weight | engine §4.5 | Adopted; swing_weight scales weapon clip duration |
+| Loot grammar ItemLook | BA-Stick doc | Moved (game content) |
+| 7 classes, class rows, class clips | BA-Stick doc | Moved; the engine keeps an example archetype |
+| from_seed(seed, archetype) | engine §4.6 | Adopted and implemented, deterministic |
+| Masks / layers | engine §5.2 | Adopted; bitsets plus a Lower mask |
+| Gait generator | engine §5.3 | Improved: thresholds (0.6, 1.5) |
+| Clip schema v2, events as truth | engine §5.4 | Adopted plus validation |
+| Server loads events-only clips | engine §5.4 | Kept as generic `ClipMeta`, not tied to a protocol |
+| Rolls past ±180 | engine §5.1 | Improved: `root_pitch` instead of `lean` |
+| Dual-wield 18 channels | engine §5.1 | Improved: 19 with `root_pitch` |
+| Strafe/aim | engine §17 | Recommended, not yet implemented |
+| MMO / server authority / ActionEvent / tick rates | BA-Stick doc | Moved; deferred there (BA-Stick keeps bichael's protocol) |
+| Milestones M1.5/M3a-c/M4+ | engine §13 + BA-Stick doc | Engine parts folded into M2/M4; game parts in BA-Stick |

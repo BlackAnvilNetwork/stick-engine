@@ -29,6 +29,22 @@ struct App {
     cursor: (f64, f64),
     view: (usize, usize, usize), // scale, offset x, offset y
     right_down: bool,
+    bindings: stick_engine::input::Bindings,
+}
+
+/// Settings file: `$XDG_CONFIG_HOME/stick-engine/settings.txt` (or `~/.config/...`).
+fn settings_path() -> Option<std::path::PathBuf> {
+    let base = std::env::var_os("XDG_CONFIG_HOME").map(std::path::PathBuf::from).or_else(|| {
+        std::env::var_os("HOME").or_else(|| std::env::var_os("APPDATA")).map(|h| std::path::PathBuf::from(h).join(".config"))
+    })?;
+    Some(base.join("stick-engine").join("settings.txt"))
+}
+
+fn save_settings(s: &stick_engine::input::Settings) {
+    if let Some(p) = settings_path() {
+        let _ = p.parent().map(std::fs::create_dir_all);
+        let _ = std::fs::write(p, s.to_text());
+    }
 }
 
 impl App {
@@ -58,25 +74,11 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, .. } => {
                 let down = event.state == ElementState::Pressed;
                 if let PhysicalKey::Code(code) = event.physical_key {
-                    let i = &mut self.input;
-                    match code {
-                        KeyCode::KeyW | KeyCode::ArrowUp => i.up = down,
-                        KeyCode::KeyS | KeyCode::ArrowDown => i.down = down,
-                        KeyCode::KeyA | KeyCode::ArrowLeft => i.left = down,
-                        KeyCode::KeyD | KeyCode::ArrowRight => i.right = down,
-                        KeyCode::ShiftLeft | KeyCode::ShiftRight => i.run = down,
-                        KeyCode::Space => i.dash = down,
-                        KeyCode::KeyJ => i.attack = down,
-                        KeyCode::KeyH => i.hair_style = down,
-                        KeyCode::KeyK => i.hair_color = down,
-                        KeyCode::KeyV => i.cam_cycle = down,
-                        KeyCode::KeyQ => i.look_left = down,
-                        KeyCode::KeyE => i.look_right = down,
-                        KeyCode::KeyR => i.look_up = down,
-                        KeyCode::KeyF => i.look_down = down,
-                        KeyCode::Escape => el.exit(),
-                        _ => {}
+                    if code == KeyCode::Escape {
+                        el.exit();
                     }
+                    // winit's KeyCode names match W3C `KeyboardEvent.code` (KeyW, Numpad4, ...).
+                    self.bindings.apply(&mut self.input, &format!("{code:?}"), down);
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
@@ -94,6 +96,7 @@ impl ApplicationHandler for App {
                     MouseButton::Left if down => self.input.attack_click = Some(p),
                     MouseButton::Right => {
                         self.right_down = down;
+                        self.input.rmb = down;
                         if down {
                             self.input.move_click = Some(p);
                         }
@@ -106,6 +109,10 @@ impl ApplicationHandler for App {
                 let dt = (now - self.last).as_secs_f32();
                 self.last = now;
                 self.game.update(dt, &mut self.input);
+                if self.game.settings_changed {
+                    self.game.settings_changed = false;
+                    save_settings(&self.game.settings);
+                }
                 self.game.render();
                 let Some(gfx) = self.gfx.as_mut() else { return };
                 let size = gfx.window.inner_size();
@@ -149,6 +156,14 @@ fn main() {
     if let Some(m) = cam.as_deref().and_then(stick_engine::camrig::CamMode::parse) {
         game.set_cam_config(stick_engine::camrig::CamConfig { mode: m, ..game.rig.cfg });
     }
-    let mut app = App { gfx: None, game, input: Input::default(), last: Instant::now(), cursor: (0.0, 0.0), view: (2, 0, 0), right_down: false };
+    if let Some(text) = settings_path().and_then(|p| std::fs::read_to_string(p).ok()) {
+        game.settings = stick_engine::input::Settings::parse(&text);
+    }
+    // `--cam-control mouse|numpad` (or STICK_CAM_CONTROL) overrides the saved setting.
+    let ctl = args.iter().position(|a| a == "--cam-control").and_then(|i| args.get(i + 1).cloned()).or_else(|| std::env::var("STICK_CAM_CONTROL").ok());
+    if let Some(c) = ctl.as_deref().and_then(stick_engine::input::CamControl::parse) {
+        game.settings.cam_control = c;
+    }
+    let mut app = App { gfx: None, game, input: Input::default(), last: Instant::now(), cursor: (0.0, 0.0), view: (2, 0, 0), right_down: false, bindings: Default::default() };
     el.run_app(&mut app).expect("run");
 }

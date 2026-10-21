@@ -7,12 +7,14 @@ Characters are **procedurally drawn stick people** with no sprites and no 3D mod
 
 | Action | Keys |
 |---|---|
-| Walk | Iso: WASD / arrow keys (screen-relative). 3D modes: **W/S** forward/back along the facing, **A/D** (or **Q/E**) turn the character. Or **right-click** (hold to steer) to move to a spot in any mode |
+| Walk | Iso: WASD / arrow keys (screen-relative). 3D modes: **W/S** forward/back along the facing, **A/D** turn the character. Or **right-click** (hold to steer) to move to a spot in any mode |
 | Run | hold **Shift** while moving |
 | Dash | **Space** (dashes in the move direction, or facing; 0.45 s cooldown) |
 | Sword swing | **Left click** (aims at cursor) or **J** |
-| Cycle camera (iso → third-person → first-person) | **V** |
-| Camera pitch (3D modes) | **R / F** |
+| Cycle camera (iso → third-person → first-person) | **Numpad 5** (or **V**) |
+| Turn / pitch (3D modes, numpad control) | **Numpad 4 / 6** turn the character (camera follows), **Numpad 8 / 2** pitch |
+| Turn / pitch (3D modes, mouse control) | **Right-drag**: x turns, y pitches. A right click without a drag still moves |
+| Switch camera control numpad ↔ mouse | **Numpad .** (saved) |
 | Quit (native) | Esc |
 
 ### Camera modes
@@ -22,6 +24,14 @@ Characters are **procedurally drawn stick people** with no sprites and no 3D mod
 - **First-person**: eye at the head, yaw locked to the character's facing; head and body are hidden only while the eye is within 0.4 m of the head, forearms and held gear are drawn; pitch clamped to ±60°.
 
 All modes sit on one camera rail (iso → TP dolly-zoom → TP → FP boom), so every move that involves first-person travels along the third-person boom and never through the body; FP ↔ iso is a single eased move through TP (no stall), blending the facing yaw/pitch to the iso angles (`blend_s` 0.7 s for one step, 1.05 s for FP ↔ iso). Turning turns the character and the camera follows; click-to-move/aim pick the ground in every mode and the character turns toward the target. Iso keeps its fixed camera. Configure via `CamConfig` (`Game::set_cam_config`), `--cam iso|tp|fp` or `STICK_CAM` natively, or `#cam=tp` on the web. `cargo run --release -p stick_engine --example camshots -- out/` renders each mode and prints per-mode frame cost.
+
+### Input actions and settings
+
+Keys map to logical actions (`input::Action`) through `input::Bindings` (W3C `KeyboardEvent.code` names such as `Numpad4`), so a gamepad host can drive the same actions with `input::set_action`. Camera control (`input::CamControl`, numpad by default) lives in `input::Settings` (`Game::settings`). It is saved to localStorage (`stick-engine.settings`) on the web and to `~/.config/stick-engine/settings.txt` natively, and can be overridden with `#camctl=mouse` or `--cam-control mouse` / `STICK_CAM_CONTROL`.
+
+### Sky and fog
+
+Third- and first-person draw a dithered dusk sky gradient above the horizon and ordered-dither distance fog on the floor, from 18 m to full at 60 m, fading into the horizon colour. Both use palette colours only. `Game::sky_fog` turns them off. Cost: about +0.1–0.2 ms per frame (native release; `camshots` prints it).
 
 Add `#demo` to the web URL (or `--demo` natively) for a scripted autoplay. `#demo&t=4.7` fast-forwards to a moment.
 

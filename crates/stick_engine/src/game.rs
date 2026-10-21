@@ -40,13 +40,24 @@ pub struct Input {
     pub hair_color: bool,
     /// Held: cycle camera mode iso -> third -> first person on press (V).
     pub cam_cycle: bool,
-    /// Held: in the 3D camera modes Q / E turn the character (like A / D)
-    /// and R / F pitch the camera up / down.
+    /// Held (`CamTurnLeft/Right`, `CamPitchUp/Down`, numpad 4/6/8/2 by
+    /// default): in the 3D camera modes turn the character (like A / D) and
+    /// pitch the camera. Ignored in mouse camera control.
     pub look_left: bool,
     pub look_right: bool,
     pub look_up: bool,
     pub look_down: bool,
+    /// Held: switch numpad / mouse camera control on press (numpad `.`).
+    pub cam_control_toggle: bool,
+    /// Right mouse button held (mouse camera control: drag to turn / pitch).
+    pub rmb: bool,
 }
+
+/// Mouse camera control: radians per framebuffer pixel of right-drag.
+pub const MOUSE_TURN: f32 = 0.012;
+pub const MOUSE_PITCH: f32 = 0.008;
+/// Right-drag distance (px) before it counts as a turn instead of a click.
+pub const DRAG_SLOP: f32 = 3.0;
 
 /// Character turn rate in the 3D camera modes (radians per second).
 pub const TURN_SPEED: f32 = 2.6;
@@ -81,6 +92,13 @@ pub struct Game {
     pub hair: HairOptions,
     /// Camera mode, blends and look state (config in `rig.cfg`).
     pub rig: CamRig,
+    /// Persisted engine settings (camera control); hosts save them when
+    /// `settings_changed` is set and clear the flag.
+    pub settings: crate::input::Settings,
+    pub settings_changed: bool,
+    /// 3D sky gradient + distance fog (on by default; off = flat void, no fog).
+    pub sky_fog: bool,
+    drag: Option<((f32, f32), f32, bool)>,
     rng: u32,
 }
 
@@ -117,6 +135,10 @@ impl Game {
             demo: false,
             hair,
             rig: CamRig::new(CamConfig::default()),
+            settings: crate::input::Settings::default(),
+            settings_changed: false,
+            sky_fog: true,
+            drag: None,
             rng: 0x1234_5678,
         }
     }
@@ -154,10 +176,32 @@ impl Game {
 
     fn update_camera(&mut self, dt: f32, inp: &Input) {
         let s = self.subject();
-        let lp = inp.look_down as i32 as f32 - inp.look_up as i32 as f32;
+        let numpad = self.settings.cam_control == crate::input::CamControl::Numpad;
+        let lp = if numpad { inp.look_down as i32 as f32 - inp.look_up as i32 as f32 } else { 0.0 };
         let (w, h) = (self.cam.w, self.cam.h);
         self.rig.update(dt, lp, &s, self.cam.cx, self.cam.cz, w, h);
         self.cam.view = self.rig.view;
+    }
+
+    /// Mouse camera control: right-drag turns the character (x) and pitches
+    /// the camera (y). Returns true while the drag is a turn (past
+    /// `DRAG_SLOP`), so the right click is not also a move order.
+    fn mouse_drag(&mut self, inp: &Input) -> bool {
+        let (Some(m), true) = (inp.mouse, inp.rmb) else {
+            self.drag = None;
+            return false;
+        };
+        let (last, travelled, turning) = self.drag.unwrap_or((m, 0.0, false));
+        let (dx, dy) = (m.0 - last.0, m.1 - last.1);
+        let travelled = travelled + dx.abs() + dy.abs();
+        let turning = turning || travelled > DRAG_SLOP;
+        if turning {
+            self.player.yaw = crate::math::wrap_angle(self.player.yaw - dx * MOUSE_TURN);
+            let lim = self.rig.cfg.fp_pitch_limit_deg.to_radians();
+            self.rig.fp_pitch = (self.rig.fp_pitch + dy * MOUSE_PITCH).clamp(-lim, lim);
+        }
+        self.drag = Some((m, travelled, turning));
+        turning
     }
 
     fn rand(&mut self) -> f32 {
@@ -211,20 +255,31 @@ impl Game {
         } else {
             // 3D: A/D and Q/E turn the character (the camera follows its
             // facing); W/S walk forward/back along the facing.
-            let turn = sx + inp.look_right as i32 as f32 - inp.look_left as i32 as f32;
+            let numpad = self.settings.cam_control == crate::input::CamControl::Numpad;
+            let keys = if numpad { inp.look_right as i32 as f32 - inp.look_left as i32 as f32 } else { 0.0 };
+            let turn = sx + keys;
             self.player.yaw = crate::math::wrap_angle(self.player.yaw - turn.clamp(-1.0, 1.0) * TURN_SPEED * TICK);
             keep_facing = true;
             sx = 0.0;
             let (sn, cs) = self.player.yaw.sin_cos();
             (sn * -sy, cs * -sy)
         };
+        let mut move_click = inp.move_click;
+        if !iso && self.settings.cam_control == crate::input::CamControl::Mouse {
+            if self.mouse_drag(inp) {
+                move_click = None;
+                self.target = None;
+            }
+        } else {
+            self.drag = None;
+        }
         if !iso && (inp.look_left || inp.look_right || inp.left || inp.right) {
             self.target = None;
         }
         if sx != 0.0 || sy != 0.0 {
             self.target = None;
         }
-        if let Some((mx, my)) = inp.move_click {
+        if let Some((mx, my)) = move_click {
             if let Some(t) = self.cam.pick_ground(mx, my) {
                 self.target = Some(t);
             }
@@ -263,6 +318,10 @@ impl Game {
             if inp.hair_style && !self.prev.hair_style { self.hair.cycle_style(1); }
             if inp.hair_color && !self.prev.hair_color { self.hair.cycle_color(1); }
             self.hair.apply(&mut self.player.def);
+        }
+        if inp.cam_control_toggle && !self.prev.cam_control_toggle {
+            self.settings.cam_control = self.settings.cam_control.toggled();
+            self.settings_changed = true;
         }
         if inp.cam_cycle && !self.prev.cam_cycle {
             self.set_cam_mode(self.rig.mode.next());
@@ -391,7 +450,7 @@ impl Game {
 
     fn draw_ground(&mut self) {
         if let Some(v) = self.cam.view {
-            return self.draw_ground_view(&GroundMap::new(&v));
+            return self.draw_ground_view(&GroundMap::new(&v), &v);
         }
         let cam = self.cam;
         let (w, h) = (self.fb.w, self.fb.h);
@@ -424,20 +483,98 @@ impl Game {
 
     /// Ground through the screen->ground homography (one divide per pixel);
     /// pixels above the horizon or past `FAR` get the sky.
-    fn draw_ground_view(&mut self, g: &GroundMap) {
+    /// 3D floor plus sky: a dithered dusk gradient above the horizon and
+    /// ordered-dither distance fog on the ground that reaches the horizon
+    /// colour at `FAR`, so the floor never ends in a hard edge.
+    fn draw_ground_view(&mut self, g: &GroundMap, v: &crate::camera::View) {
         let (w, h) = (self.fb.w, self.fb.h);
         let st = g.step_x();
+        let sky = SkyFog::new(v, h as f32);
+        let on = self.sky_fog;
         for y in 0..h {
             let mut n = g.raw(0.5, y as f32 + 0.5);
             let row = &mut self.fb.color[y * w..(y + 1) * w];
-            for px in row.iter_mut() {
-                *px = match g.resolve(n) {
-                    None => shade(R_VOID, 0),
-                    Some((gx, gz)) => ground_texel(gx, gz),
-                };
+            let sky_px = sky.sky_row(y);
+            for (x, px) in row.iter_mut().enumerate() {
+                let th = BAYER4[(y & 3) * 4 + (x & 3)];
+                *px = if !on {
+                    match g.resolve(n) {
+                        None => shade(R_VOID, 0),
+                        Some((gx, gz)) => ground_texel(gx, gz),
+                    }
+                } else { match g.resolve_dist(n) {
+                    Some((gx, gz, d)) if d <= FAR || v.inv_d <= 0.0 => {
+                        if sky.fog(d) > th { FOG_COLOR } else { ground_texel(gx, gz) }
+                    }
+                    Some(_) => FOG_COLOR,
+                    None if y as f32 >= sky.horizon => FOG_COLOR,
+                    None => sky_px.pick(th),
+                } };
                 n = [n[0] + st[0], n[1] + st[1], n[2] + st[2]];
             }
         }
+    }
+}
+
+use crate::camera::FAR;
+
+/// 4x4 ordered-dither thresholds in (0, 1).
+const BAYER4: [f32; 16] = {
+    let m = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+    let mut o = [0.0f32; 16];
+    let mut i = 0;
+    while i < 16 {
+        o[i] = (m[i] as f32 + 0.5) / 16.0;
+        i += 1;
+    }
+    o
+};
+
+/// Fog and horizon colour (dust ramp, matches the stone floor's hue).
+pub const FOG_COLOR: u8 = shade(R_DUST, 1);
+/// Fog starts at this eye distance (metres) and is full at `FAR`.
+pub const FOG_START: f32 = 18.0;
+/// Sky bands, horizon -> zenith.
+const SKY_BANDS: [u8; 6] = [shade(R_DUST, 1), shade(R_DUST, 0), shade(R_STONE, 4), shade(R_STONE, 2), shade(R_STONE, 0), shade(R_VOID, 0)];
+
+#[derive(Clone, Copy)]
+struct SkyPx {
+    a: u8,
+    b: u8,
+    t: f32,
+}
+impl SkyPx {
+    #[inline]
+    fn pick(self, th: f32) -> u8 {
+        if self.t > th { self.b } else { self.a }
+    }
+}
+
+/// Per-frame sky / fog parameters for one view.
+struct SkyFog {
+    horizon: f32,
+    span: f32,
+}
+impl SkyFog {
+    fn new(v: &crate::camera::View, h: f32) -> SkyFog {
+        let f = v.fwd();
+        let fh = v3(f.x, 0.0, f.z);
+        let l = (fh.x * fh.x + fh.z * fh.z).sqrt().max(1e-4);
+        let eye = v.eye().unwrap_or(v.target);
+        let p = Camera::project_view(v, eye + fh * (1.0e4 / l));
+        let horizon = if p.culled() { -1.0 } else { p.y };
+        SkyFog { horizon, span: (h * 0.3).max(1.0) }
+    }
+    /// Gradient position for a sky row, as two bands and a dither mix.
+    fn sky_row(&self, y: usize) -> SkyPx {
+        let u = ((self.horizon - y as f32) / self.span).clamp(0.0, 0.999) * (SKY_BANDS.len() - 1) as f32;
+        let i = u as usize;
+        SkyPx { a: SKY_BANDS[i], b: SKY_BANDS[(i + 1).min(SKY_BANDS.len() - 1)], t: u - i as f32 }
+    }
+    /// Fog amount (0..1) at eye distance `d`.
+    #[inline]
+    fn fog(&self, d: f32) -> f32 {
+        ((d - FOG_START) / (FAR - FOG_START)).clamp(0.0, 1.0)
     }
 }
 

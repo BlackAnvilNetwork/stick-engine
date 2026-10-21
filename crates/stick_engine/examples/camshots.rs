@@ -50,6 +50,13 @@ fn main() {
         g.render();
         save(&g, &format!("{out}/persp-{name}.ppm"));
         println!("{name}: {:.3} ms/frame (update + render)", cost(&mut g));
+        if mode != CamMode::Iso {
+            g.sky_fog = false;
+            let off = cost(&mut g);
+            g.sky_fog = true;
+            let on = cost(&mut g);
+            println!("{name}: sky+fog {on:.3} ms vs off {off:.3} ms ({:+.3} ms)", on - off);
+        }
     }
     g.set_cam_mode(CamMode::Iso);
     settle(&mut g, 1.0);

@@ -105,7 +105,8 @@ pub fn start() -> Result<(), JsValue> {
         cb.forget();
     }
 
-    let f: Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>> = Rc::new(RefCell::new(None));
+    type Frame = Rc<RefCell<Option<Closure<dyn FnMut(f64)>>>>;
+    let f: Frame = Rc::new(RefCell::new(None));
     let g = f.clone();
     *g.borrow_mut() = Some(Closure::new(move |ts: f64| {
         {

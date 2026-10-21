@@ -1,50 +1,92 @@
-//! Stick-figure rig: procedural forward kinematics from a `Pose` into 3D
-//! joints, then drawing those joints through a `Camera`.
-use crate::anim::Pose;
-use crate::camera::Camera;
+//! Stick-figure rig: skeleton definition and forward kinematics from a
+//! [`Pose`] into 3D joints. Pure maths: no raster, camera or platform code,
+//! so it runs headless (tools, tests, servers). Drawing lives in `render`.
+use crate::anim::{wrap_deg, Ch, Pose};
+use crate::body::BodyParams;
 use crate::math::{v3, Vec3};
-use crate::raster::*;
 
-/// Body proportions in metres (total height ~1.8 m => ~80 px on screen).
-#[derive(Clone, Copy, Debug)]
-pub struct Proportions {
-    pub thigh: f32,
-    pub shin: f32,
-    pub spine: f32,
-    pub neck: f32,
-    pub head_r: f32,
-    pub upper_arm: f32,
-    pub forearm: f32,
-    pub shoulder_w: f32,
-    pub hip_w: f32,
-    pub sword: f32,
-    pub limb_px: f32,
+/// Joint points produced by FK.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Joint {
+    Pelvis, Chest, Neck, Head, LHip, RHip, LKnee, RKnee, LFoot, RFoot,
+    LShoulder, RShoulder, LElbow, RElbow, LHand, RHand,
 }
+pub const N_JOINTS: usize = 16;
+pub const JOINT_NAMES: [&str; N_JOINTS] = [
+    "pelvis", "chest", "neck", "head", "l_hip", "r_hip", "l_knee", "r_knee", "l_foot", "r_foot",
+    "l_shoulder", "r_shoulder", "l_elbow", "r_elbow", "l_hand", "r_hand",
+];
+pub fn joint(name: &str) -> Option<Joint> {
+    JOINT_NAMES.iter().position(|n| *n == name).map(|i| ALL_JOINTS[i])
+}
+const ALL_JOINTS: [Joint; N_JOINTS] = [
+    Joint::Pelvis, Joint::Chest, Joint::Neck, Joint::Head, Joint::LHip, Joint::RHip, Joint::LKnee,
+    Joint::RKnee, Joint::LFoot, Joint::RFoot, Joint::LShoulder, Joint::RShoulder, Joint::LElbow,
+    Joint::RElbow, Joint::LHand, Joint::RHand,
+];
 
-impl Default for Proportions {
-    fn default() -> Self {
-        Proportions {
-            thigh: 0.46, shin: 0.46, spine: 0.52, neck: 0.08, head_r: 0.14,
-            upper_arm: 0.3, forearm: 0.28, shoulder_w: 0.19, hip_w: 0.1,
-            sword: 0.9, limb_px: 2.2,
+/// Drawn bone segments (each has its own thickness multiplier).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Bone {
+    Hips, Spine, Neck, Shoulders, Head, LThigh, RThigh, LShin, RShin,
+    LUpperArm, RUpperArm, LForearm, RForearm,
+}
+pub const N_BONES: usize = 13;
+pub const BONE_NAMES: [&str; N_BONES] = [
+    "hips", "spine", "neck", "shoulders", "head", "l_thigh", "r_thigh", "l_shin", "r_shin",
+    "l_upper_arm", "r_upper_arm", "l_forearm", "r_forearm",
+];
+pub const ALL_BONES: [Bone; N_BONES] = [
+    Bone::Hips, Bone::Spine, Bone::Neck, Bone::Shoulders, Bone::Head, Bone::LThigh, Bone::RThigh,
+    Bone::LShin, Bone::RShin, Bone::LUpperArm, Bone::RUpperArm, Bone::LForearm, Bone::RForearm,
+];
+pub fn bone(name: &str) -> Option<Bone> {
+    BONE_NAMES.iter().position(|n| *n == name).map(|i| ALL_BONES[i])
+}
+impl Bone {
+    /// (from, to) joints of the segment. `Head` is drawn as a disc at `to`.
+    pub fn ends(self) -> (Joint, Joint) {
+        use Joint::*;
+        match self {
+            Bone::Hips => (LHip, RHip),
+            Bone::Spine => (Pelvis, Chest),
+            Bone::Neck => (Chest, Neck),
+            Bone::Shoulders => (LShoulder, RShoulder),
+            Bone::Head => (Neck, Head),
+            Bone::LThigh => (LHip, LKnee),
+            Bone::RThigh => (RHip, RKnee),
+            Bone::LShin => (LKnee, LFoot),
+            Bone::RShin => (RKnee, RFoot),
+            Bone::LUpperArm => (LShoulder, LElbow),
+            Bone::RUpperArm => (RShoulder, RElbow),
+            Bone::LForearm => (LElbow, LHand),
+            Bone::RForearm => (RElbow, RHand),
         }
     }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Joints {
-    pub pelvis: Vec3,
-    pub chest: Vec3,
-    pub neck: Vec3,
-    pub head: Vec3,
-    pub hip: [Vec3; 2],
-    pub knee: [Vec3; 2],
-    pub foot: [Vec3; 2],
-    pub shoulder: [Vec3; 2],
-    pub elbow: [Vec3; 2],
-    pub hand: [Vec3; 2],
-    pub sword_tip: Vec3,
-    pub sword_dir: Vec3,
+    pub p: [Vec3; N_JOINTS],
+    /// Unit weapon directions for the [left, right] hand.
+    pub wpn_dir: [Vec3; 2],
+    /// Character forward / right (after root pitch: body-local axes).
+    pub fwd: Vec3,
+    pub right: Vec3,
+}
+
+impl Joints {
+    #[inline]
+    pub fn get(&self, j: Joint) -> Vec3 {
+        self.p[j as usize]
+    }
+    /// Point at distance `len` along the hand's weapon direction (0 = left, 1 = right).
+    pub fn weapon_point(&self, hand: usize, len: f32) -> Vec3 {
+        let h = if hand == 0 { Joint::LHand } else { Joint::RHand };
+        self.get(h) + self.wpn_dir[hand] * len
+    }
 }
 
 fn basis(yaw: f32) -> (Vec3, Vec3) {
@@ -52,90 +94,88 @@ fn basis(yaw: f32) -> (Vec3, Vec3) {
     (v3(yaw.sin(), 0.0, yaw.cos()), v3(yaw.cos(), 0.0, -yaw.sin()))
 }
 
-/// Forward kinematics. `pos` = ground position under the pelvis, `yaw` = facing (rad).
-pub fn solve(pose: &Pose, pr: &Proportions, pos: Vec3, yaw: f32) -> Joints {
-    let d = |n: &str| pose.get(n).to_radians();
+/// Forward kinematics. `pos` = ground position under the pelvis, `yaw` = facing
+/// (rad), `sway` = lateral pelvis offset in metres (gait hip sway).
+pub fn solve(pose: &Pose, b: &BodyParams, pos: Vec3, yaw: f32, sway: f32) -> Joints {
+    use Joint::*;
+    let d = |c: Ch| pose.get(c).to_radians();
     let up = Vec3::UP;
     let (f, r) = basis(yaw);
-    let mut j = Joints::default();
-    j.pelvis = pos + up * (pr.thigh + pr.shin - 0.02 + pose.get("bob"));
+    let mut pts = [Vec3::default(); N_JOINTS];
+    let mut wpn = [Vec3::default(); 2];
+    let mut set = |k: Joint, v: Vec3| pts[k as usize] = v;
+    let pelvis = pos + up * (b.thigh + b.shin - 0.02 + pose.get(Ch::Bob)) + r * sway;
+    set(Pelvis, pelvis);
 
-    // legs: 0 = left, 1 = right. Angle a swings forward from straight down.
+    // legs: angle swings forward from straight down.
     let hang = |a: f32, f: Vec3| up * -a.cos() + f * a.sin();
-    for (i, s, hip_n, knee_n) in [(0, -1.0, "l_hip", "l_knee"), (1, 1.0, "r_hip", "r_knee")] {
-        let a = d(hip_n);
-        j.hip[i] = j.pelvis + r * (s * pr.hip_w);
-        j.knee[i] = j.hip[i] + hang(a, f) * pr.thigh;
-        let mut foot = j.knee[i] + hang(a - d(knee_n), f) * pr.shin;
-        foot.y = foot.y.max(0.02); // cheap ground clamp (real IK planned)
-        j.foot[i] = foot;
+    let (hw, sw) = (b.hip_w * 0.5, b.shoulder_w * 0.5);
+    let legs = [(-1.0, Ch::LHip, Ch::LKnee, LHip, LKnee, LFoot), (1.0, Ch::RHip, Ch::RKnee, RHip, RKnee, RFoot)];
+    for (s, hc, kc, hj, kj, fj) in legs {
+        let a = d(hc);
+        let hip = pelvis + r * (s * hw);
+        let knee = hip + hang(a, f) * b.thigh;
+        set(hj, hip);
+        set(kj, knee);
+        set(fj, knee + hang(a - d(kc), f) * b.shin);
     }
 
-    let lean = d("lean");
+    let lean = d(Ch::Lean);
     let sdir = up * lean.cos() + f * lean.sin();
-    j.chest = j.pelvis + sdir * pr.spine;
-    j.neck = j.chest + sdir * pr.neck;
-    let head_dir = up * (lean * 0.5 + d("head")).cos() + f * (lean * 0.5 + d("head")).sin();
-    j.head = j.neck + head_dir * pr.head_r;
+    let chest = pelvis + sdir * b.torso;
+    let neck = chest + sdir * b.neck;
+    // The head counter-tilts by half of a *moderate* lean (keeps eyes level),
+    // relative to the spine, so large leans (flips) don't invert it.
+    let counter = -0.5 * wrap_deg(pose.get(Ch::Lean)).clamp(-90.0, 90.0).to_radians();
+    let ha = lean + counter + d(Ch::Head);
+    let head = neck + (up * ha.cos() + f * ha.sin()) * b.head_r;
+    set(Chest, chest);
+    set(Neck, neck);
+    set(Head, head);
 
-    let tw = yaw + d("twist");
+    let tw = yaw + d(Ch::Twist);
     let (f2, r2) = basis(tw);
-    for (i, s, sh, el, out) in [(0, -1.0, "l_shoulder", "l_elbow", "l_arm_out"), (1, 1.0, "r_shoulder", "r_elbow", "r_arm_out")] {
+    let arms = [
+        (0usize, -1.0, Ch::LShoulder, Ch::LElbow, Ch::LArmOut, LShoulder, LElbow, LHand, Ch::LWpnYaw, Ch::LWpnPitch),
+        (1, 1.0, Ch::RShoulder, Ch::RElbow, Ch::RArmOut, RShoulder, RElbow, RHand, Ch::RWpnYaw, Ch::RWpnPitch),
+    ];
+    for (i, s, sh, el, out, sj, ej, hj, wy, wp) in arms {
         let (a, o) = (d(sh), d(out));
         let arm = |a: f32| hang(a, f2) * o.cos() + r2 * (s * o.sin());
-        j.shoulder[i] = j.chest - sdir * 0.03 + r2 * (s * pr.shoulder_w);
-        j.elbow[i] = j.shoulder[i] + arm(a) * pr.upper_arm;
-        j.hand[i] = j.elbow[i] + arm(a + d(el)) * pr.forearm;
+        let shoulder = chest - sdir * 0.03 + r2 * (s * sw);
+        let elbow = shoulder + arm(a) * b.upper_arm;
+        set(sj, shoulder);
+        set(ej, elbow);
+        set(hj, elbow + arm(a + d(el)) * b.forearm);
+        let (fs, _) = basis(tw + d(wy));
+        let p = d(wp);
+        wpn[i] = fs * p.cos() + up * p.sin();
     }
-    let (fs, _) = basis(tw + d("sword_yaw"));
-    let p = d("sword_pitch");
-    j.sword_dir = fs * p.cos() + up * p.sin();
-    j.sword_tip = j.hand[1] + j.sword_dir * pr.sword;
+    let mut j = Joints { p: pts, wpn_dir: wpn, fwd: f, right: r };
+
+    // Whole-body rotation (rolls, knockdowns) about the pelvis' right axis.
+    let rp = pose.get(Ch::RootPitch);
+    if wrap_deg(rp).abs() > 1e-3 {
+        let a = rp.to_radians();
+        for q in j.p.iter_mut() {
+            *q = pelvis + (*q - pelvis).rotate(r, a);
+        }
+        for w in j.wpn_dir.iter_mut() {
+            *w = w.rotate(r, a);
+        }
+        j.fwd = f.rotate(r, a);
+        // keep the rotated body above the ground
+        let low = j.p.iter().map(|q| q.y).fold(f32::INFINITY, f32::min);
+        if low < 0.02 {
+            for q in j.p.iter_mut() {
+                q.y += 0.02 - low;
+            }
+        }
+    } else {
+        for fj in [LFoot, RFoot] {
+            let q = &mut j.p[fj as usize];
+            q.y = q.y.max(0.02); // cheap ground clamp (foot IK planned)
+        }
+    }
     j
-}
-
-/// Colours for one character.
-#[derive(Clone, Copy, Debug)]
-pub struct Look {
-    pub body: u8,
-    pub far: u8,
-    pub accent: u8,
-}
-
-impl Default for Look {
-    fn default() -> Self {
-        Look { body: C_BODY, far: C_BODY_FAR, accent: C_ACCENT }
-    }
-}
-
-pub fn draw(fb: &mut Framebuffer, cam: &Camera, j: &Joints, pr: &Proportions, look: &Look) {
-    let p = |v: Vec3| cam.project(v);
-    let o = Some(C_OUTLINE);
-    let t = pr.limb_px;
-    // far side (left) limbs slightly darker for depth readability
-    for (i, c) in [(0usize, look.far), (1, look.body)] {
-        fb.capsule(p(j.hip[i]), p(j.knee[i]), t, c, o);
-        fb.capsule(p(j.knee[i]), p(j.foot[i]), t, c, o);
-        fb.capsule(p(j.shoulder[i]), p(j.elbow[i]), t * 0.9, c, o);
-        fb.capsule(p(j.elbow[i]), p(j.hand[i]), t * 0.9, c, o);
-    }
-    fb.capsule(p(j.hip[0]), p(j.hip[1]), t, look.body, o);
-    fb.capsule(p(j.pelvis), p(j.chest), t + 0.6, look.body, o);
-    fb.capsule(p(j.shoulder[0]), p(j.shoulder[1]), t, look.body, o);
-    fb.capsule(p(j.chest), p(j.neck), t * 0.8, look.body, o);
-    // scarf accent at the neck
-    fb.disc(p(j.neck), t + 0.4, look.accent, None);
-    let head_px = pr.head_r * crate::camera::HEIGHT_PX;
-    fb.disc(p(j.head), head_px, look.body, o);
-    // sword: hilt, crossguard, blade
-    let hand = j.hand[1];
-    let pommel = hand - j.sword_dir * 0.1;
-    let guard_c = hand + j.sword_dir * 0.06;
-    let side = v3(j.sword_dir.z, 0.0, -j.sword_dir.x);
-    let side = if side.len() > 1e-3 { side * (0.11 / side.len()) } else { v3(0.11, 0.0, 0.0) };
-    fb.capsule(p(pommel), p(guard_c), 1.2, C_HILT, None);
-    fb.capsule(p(guard_c - side), p(guard_c + side), 1.0, C_GOLD, None);
-    fb.capsule(p(guard_c), p(j.sword_tip), 1.0, C_STEEL, o);
-    fb.line(p(guard_c), p(j.sword_tip), C_TRAIL);
-    fb.disc(p(j.hand[1]), t * 0.9, look.body, None);
 }

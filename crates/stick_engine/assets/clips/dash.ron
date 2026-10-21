@@ -4,7 +4,8 @@
     name: "dash",
     duration: 0.22,
     looping: false,
-    base: { "sword_yaw": 160.0, "sword_pitch": -10.0, "r_arm_out": 20.0, "l_arm_out": 20.0 },
+    mask: Full,
+    base: { "r_wpn_yaw": 160.0, "r_wpn_pitch": -10.0, "r_arm_out": 20.0, "l_arm_out": 20.0 },
     keys: [
         (t: 0.0,  pose: { "lean": 25.0, "l_hip": 45.0, "l_knee": 50.0, "r_hip": -40.0, "r_knee": 30.0, "l_shoulder": -50.0, "r_shoulder": -60.0, "bob": -0.12 }),
         (t: 0.12, pose: { "lean": 40.0, "l_hip": 55.0, "l_knee": 70.0, "r_hip": -50.0, "r_knee": 20.0, "l_shoulder": -70.0, "r_shoulder": -75.0, "l_elbow": 10.0, "r_elbow": 10.0, "bob": -0.18 }),

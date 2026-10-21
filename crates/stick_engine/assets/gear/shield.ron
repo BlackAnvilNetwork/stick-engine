@@ -1,0 +1,11 @@
+// Example round shield, held in the left hand.
+(
+    id: "shield",
+    slot: OffHand,
+    stance: Some("shield"),
+    material: Some("leather"),
+    shapes: [
+        Disc(center: (0.0, 0.0, 0.05), r: 0.22, ramp: Material),
+        Disc(center: (0.0, 0.0, 0.07), r: 0.06, ramp: Trim),
+    ],
+)

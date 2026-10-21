@@ -1,36 +1,76 @@
-//! CPU pixel rasterizer: 8-bit indexed colour + f32 depth buffer.
+//! CPU pixel rasterizer: 8-bit indexed colour (ramp model) + f32 depth buffer.
 use crate::camera::P2;
 
-/// 16-colour palette (0x00RRGGBB). Index constants below.
-pub const PALETTE: [u32; 16] = [
-    0x0d0b14, // 0 void / outline
-    0x2a2633, // 1 ground dark
-    0x34303f, // 2 ground light
-    0x221f2a, // 3 grid line
-    0x18161f, // 4 shadow
-    0xe8e2d0, // 5 bone white (body)
-    0xc9b98f, // 6 body far side
-    0xb33939, // 7 accent red (scarf/head band)
-    0x9aa6b8, // 8 steel
-    0xf4f7ff, // 9 steel highlight / trail
-    0x6c5a42, // 10 hilt brown
-    0xd9a441, // 11 gold
-    0x7d7486, // 12 dust
-    0x4a4458, // 13 stone
-    0x5fc4e8, // 14 dash cyan
-    0x3b3546, // 15 ground mid
+/// Shades per colour ramp. A pixel index is `ramp * RAMP_LEN + shade`
+/// (shade 0 = darkest).
+pub const RAMP_LEN: usize = 6;
+
+/// Built-in ramps (0x00RRGGBB, dark -> light). Body, gear and effects refer to
+/// ramps through `RampMap` slots, never to literal indices.
+pub const RAMPS: &[(&str, [u32; RAMP_LEN])] = &[
+    ("void", [0x0d0b14, 0x0d0b14, 0x0d0b14, 0x0d0b14, 0x0d0b14, 0x0d0b14]),
+    ("stone", [0x18161f, 0x221f2a, 0x2a2633, 0x34303f, 0x3b3546, 0x4a4458]),
+    ("bone", [0x5a5446, 0x8a8068, 0xb0a582, 0xc9b98f, 0xe8e2d0, 0xf6f2e6]),
+    ("blood", [0x3a1416, 0x5c1d20, 0x82282b, 0xb33939, 0xd0584f, 0xe88a78]),
+    ("steel", [0x2c3240, 0x4a5466, 0x6c788c, 0x9aa6b8, 0xc4cede, 0xf4f7ff]),
+    ("gold", [0x4a3414, 0x6e4f1e, 0x9a7028, 0xd9a441, 0xeec266, 0xfbe39a]),
+    ("leather", [0x2a2016, 0x3e3022, 0x54422f, 0x6c5a42, 0x8a7558, 0xa8916f]),
+    ("dust", [0x3a3540, 0x4e4856, 0x625b6c, 0x7d7486, 0x9a92a2, 0xb8b0c0]),
+    ("arcane", [0x0f2a3a, 0x16455c, 0x22698a, 0x3a96bc, 0x5fc4e8, 0xa8ecff]),
+    ("white", [0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff, 0xffffff]),
+    ("fire", [0x3a0e08, 0x6e1c0c, 0xa83410, 0xe0601a, 0xf89a32, 0xffd870]),
+    ("ice", [0x1a2c44, 0x2c4a6e, 0x46729a, 0x6ea2c8, 0xa0cfe8, 0xe0f6ff]),
+    ("team_blue", [0x101c3a, 0x1a2e5e, 0x284688, 0x3a64b8, 0x5c8ae0, 0x98b8f6]),
+    ("team_green", [0x0e2a16, 0x184424, 0x246236, 0x34864a, 0x52aa64, 0x8ad296]),
 ];
-pub const C_OUTLINE: u8 = 0;
-pub const C_SHADOW: u8 = 4;
-pub const C_BODY: u8 = 5;
-pub const C_BODY_FAR: u8 = 6;
-pub const C_ACCENT: u8 = 7;
-pub const C_STEEL: u8 = 8;
-pub const C_TRAIL: u8 = 9;
-pub const C_HILT: u8 = 10;
-pub const C_GOLD: u8 = 11;
-pub const C_DUST: u8 = 12;
-pub const C_DASH: u8 = 14;
+
+/// Ramp id by name (`None` if unknown).
+pub fn ramp_id(name: &str) -> Option<u8> {
+    RAMPS.iter().position(|r| r.0 == name).map(|i| i as u8)
+}
+
+/// Palette index of `shade` in `ramp` (shade is clamped to the ramp).
+#[inline]
+pub const fn shade(ramp: u8, shade: u8) -> u8 {
+    let s = if (shade as usize) < RAMP_LEN { shade } else { (RAMP_LEN - 1) as u8 };
+    ramp * RAMP_LEN as u8 + s
+}
+
+const fn build_lut() -> [u32; 256] {
+    let mut lut = [0xff00ffu32; 256]; // magenta = unassigned index
+    let mut r = 0;
+    while r < RAMPS.len() {
+        let mut s = 0;
+        while s < RAMP_LEN {
+            lut[r * RAMP_LEN + s] = RAMPS[r].1[s];
+            s += 1;
+        }
+        r += 1;
+    }
+    lut
+}
+
+/// 256-entry index -> 0x00RRGGBB lookup table used at present time.
+/// Day/night or fog can be applied as a whole-LUT transform.
+pub static LUT: [u32; 256] = build_lut();
+
+pub const R_VOID: u8 = 0;
+pub const R_STONE: u8 = 1;
+pub const R_BONE: u8 = 2;
+pub const R_BLOOD: u8 = 3;
+pub const R_STEEL: u8 = 4;
+pub const R_GOLD: u8 = 5;
+pub const R_LEATHER: u8 = 6;
+pub const R_DUST: u8 = 7;
+pub const R_ARCANE: u8 = 8;
+pub const R_WHITE: u8 = 9;
+
+pub const C_OUTLINE: u8 = shade(R_VOID, 0);
+pub const C_SHADOW: u8 = shade(R_STONE, 0);
+pub const C_GOLD: u8 = shade(R_GOLD, 3);
+pub const C_DUST: u8 = shade(R_DUST, 3);
+pub const C_TRAIL: u8 = shade(R_STEEL, 5);
+pub const C_DASH: u8 = shade(R_ARCANE, 4);
 
 pub struct Framebuffer {
     pub w: usize,
@@ -130,7 +170,7 @@ impl Framebuffer {
     /// Convert indexed colour to RGBA8 (web ImageData layout).
     pub fn write_rgba(&self, out: &mut [u8]) {
         for (i, &c) in self.color.iter().enumerate() {
-            let p = PALETTE[c as usize & 15];
+            let p = LUT[c as usize];
             out[i * 4] = (p >> 16) as u8;
             out[i * 4 + 1] = (p >> 8) as u8;
             out[i * 4 + 2] = p as u8;

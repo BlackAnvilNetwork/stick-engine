@@ -1,13 +1,24 @@
-//! Stick Engine core: math, CPU pixel raster, stick rig, data-driven animation,
-//! character state machine and a tiny game loop. Platform hosts live in
-//! `stick_web` (wasm) and `stick_native` (winit + softbuffer).
+//! Stick Engine core: math, CPU pixel raster with ramp palettes, headless
+//! stick rig (FK), character definitions, gear, data-driven animation and
+//! actions, procedural gait, drawing, and a tiny demo game loop. Platform
+//! hosts live in `stick_web` (wasm) and `stick_native` (winit + softbuffer).
+//!
+//! Headless-capable modules (no drawing or camera; palette constants only):
+//! `anim`, `actions`,
+//! `body`, `gait`, `gear`, `rig`, `character`, `math`.
 
+pub mod actions;
 pub mod anim;
+pub mod body;
 pub mod camera;
 pub mod character;
+pub mod color;
+pub mod gait;
 pub mod game;
+pub mod gear;
 pub mod math;
 pub mod raster;
+pub mod render;
 pub mod rig;
 
 /// Internal framebuffer resolution. 640x360 keeps an ~80 px stick figure at

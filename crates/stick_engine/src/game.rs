@@ -1,10 +1,15 @@
 //! Minimal playable scene: one stick hero on a procedural tile floor.
+use crate::actions::ActionTable;
 use crate::anim::AnimLibrary;
+use crate::body::{CharacterDef, GearRef, Sex};
 use crate::camera::Camera;
-use crate::character::{Action, Character, Intent};
+use crate::character::{Character, Intent};
+use crate::color::RampMap;
+use crate::gear::{GearLib, GearSlot};
 use crate::math::{v3, Vec3};
 use crate::raster::*;
-use crate::rig::{self, Look, Proportions};
+use crate::render::{self, DrawOpts};
+use crate::rig;
 
 pub const TICK: f32 = 1.0 / 60.0;
 
@@ -34,17 +39,21 @@ struct Particle {
 
 pub struct Game {
     pub lib: AnimLibrary,
+    pub actions: ActionTable,
+    pub gear: GearLib,
     pub player: Character,
     pub cam: Camera,
     pub fb: Framebuffer,
-    pub props: Proportions,
-    pub look: Look,
+    pub opts: DrawOpts,
+    act_dash: usize,
+    act_swing: usize,
     target: Option<(f32, f32)>,
     prev: Input,
     accum: f32,
     particles: Vec<Particle>,
     trail: Vec<(Vec3, Vec3, f32)>,
     ghosts: Vec<(rig::Joints, f32)>,
+    flash: f32,
     pub time: f32,
     pub demo: bool,
     rng: u32,
@@ -54,19 +63,29 @@ const PILLARS: [(f32, f32); 4] = [(4.0, -3.0), (-5.0, 2.0), (6.0, 6.0), (-3.0, -
 
 impl Game {
     pub fn new(w: usize, h: usize) -> Self {
+        let actions = ActionTable::builtin();
+        let gear = GearLib::builtin();
+        let mut def = CharacterDef::new(Sex::Male);
+        let sword = gear.index("sword").map(|base| GearRef { base, look_seed: 0 });
+        def.equip(GearSlot::MainHand, sword);
+        let player = Character::new(0.0, 0.0, def, &gear, &actions);
         Game {
             lib: AnimLibrary::builtin(),
-            player: Character::new(0.0, 0.0),
+            act_dash: actions.id("dash").expect("dash action"),
+            act_swing: actions.id("swing").expect("swing action"),
+            actions,
+            gear,
+            player,
             cam: Camera::new(w, h),
             fb: Framebuffer::new(w, h),
-            props: Proportions::default(),
-            look: Look::default(),
+            opts: DrawOpts::default(),
             target: None,
             prev: Input::default(),
             accum: 0.0,
             particles: Vec::new(),
             trail: Vec::new(),
             ghosts: Vec::new(),
+            flash: 0.0,
             time: 0.0,
             demo: false,
             rng: 0x1234_5678,
@@ -134,40 +153,56 @@ impl Game {
         }
         let attack_edge = (inp.attack && !self.prev.attack) || inp.attack_click.is_some();
         let aim_px = inp.attack_click.or(inp.mouse.filter(|_| inp.attack));
+        let dash = inp.dash && !self.prev.dash;
+        let request = if attack_edge {
+            Some(self.act_swing)
+        } else if dash {
+            Some(self.act_dash)
+        } else {
+            None
+        };
         let it = Intent {
             dir,
             run: inp.run,
-            dash: inp.dash && !self.prev.dash,
-            swing: attack_edge,
+            request,
+            release: false,
             aim: aim_px.map(|(x, y)| self.cam.unproject_ground(x, y)),
         };
-        if it.swing || it.dash {
+        if request.is_some() {
             self.target = None;
         }
         self.prev = *inp;
         let was = self.player.action;
-        self.player.step(&self.lib, &it, TICK);
+        let was_hit = self.player.hit_active();
+        self.player.step(&self.lib, &self.actions, &it, TICK);
 
         // effects
         let p = self.player.pos;
-        if self.player.action == Action::Dash {
-            let j = rig::solve(&self.player.anim.pose, &self.props, p, self.player.yaw);
+        let act = self.player.action;
+        if act == self.act_dash {
+            let j = self.player_joints();
             self.ghosts.push((j, 0.25));
-            if was != Action::Dash {
+            if was != self.act_dash {
                 for _ in 0..14 { self.spawn_dust(p, 2.5); }
             }
         }
-        if self.player.action == Action::Run && (self.time * 10.0) as i32 % 2 == 0 && self.rand() > 0.3 {
+        if act == self.actions.run && (self.time * 10.0) as i32 % 2 == 0 && self.rand() > 0.3 {
             self.spawn_dust(p, 0.8);
         }
-        if self.player.action == Action::Swing {
-            let j = rig::solve(&self.player.anim.pose, &self.props, p, self.player.yaw);
-            self.trail.push((j.hand[1] + j.sword_dir * 0.2, j.sword_tip, 0.12));
-            if self.player.hit_active && self.rand() > 0.4 {
+        if act == self.act_swing {
+            let j = self.player_joints();
+            let reach = self.player.def.equipped(GearSlot::MainHand, &self.gear).map(|g| g.reach).unwrap_or(0.9);
+            let tip = j.weapon_point(1, reach);
+            self.trail.push((j.weapon_point(1, 0.2), tip, 0.12));
+            if self.player.hit_active() && self.rand() > 0.4 {
                 let v = v3(self.rand(), self.rand().abs() + 0.5, self.rand()) * 2.0;
-                self.particles.push(Particle { p: j.sword_tip, v, life: 0.3, c: C_GOLD });
+                self.particles.push(Particle { p: tip, v, life: 0.3, c: C_GOLD });
+            }
+            if self.player.hit_active() && !was_hit {
+                self.flash = 2.0 * TICK; // demo of the hit-flash RampMap
             }
         }
+        self.flash = (self.flash - TICK).max(0.0);
         for g in &mut self.ghosts { g.1 -= TICK; }
         self.ghosts.retain(|g| g.1 > 0.0);
         for t in &mut self.trail { t.2 -= TICK; }
@@ -183,6 +218,13 @@ impl Game {
         // camera follow
         self.cam.cx += (p.x - self.cam.cx) * 0.08;
         self.cam.cz += (p.z - self.cam.cz) * 0.08;
+    }
+
+    /// FK joints of the player for the current pose.
+    pub fn player_joints(&self) -> rig::Joints {
+        let c = &self.player;
+        let b = c.def.effective_body(&self.gear);
+        rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway)
     }
 
     fn spawn_dust(&mut self, p: Vec3, s: f32) {
@@ -206,19 +248,24 @@ impl Game {
             self.fb.line(a(0.0, 3.0), a(-5.0, 0.0), C_GOLD);
         }
         let ghosts: Vec<_> = self.ghosts.iter().map(|g| g.0).collect();
-        let ghost_look = Look { body: C_DASH, far: C_DASH, accent: C_DASH };
+        let body = self.player.def.effective_body(&self.gear);
+        let ghost = RampMap::default().tint(R_ARCANE).team(R_ARCANE);
         for j in ghosts.iter().step_by(3) {
-            rig::draw(&mut self.fb, &cam, j, &self.props, &ghost_look);
+            render::draw_body(&mut self.fb, &cam, j, &body, &ghost, &self.opts);
             // push ghosts behind the live figure
             for d in self.fb.depth.iter_mut() { if *d < f32::INFINITY { *d = f32::INFINITY; } }
         }
         for (x, z) in PILLARS {
             let b = cam.project(v3(x, 0.0, z));
             self.fb.shadow_ellipse(b.x, b.y, 16.0, 7.0, C_SHADOW);
-            self.fb.capsule(b, cam.project(v3(x, 2.2, z)), 9.0, 13, Some(C_OUTLINE));
+            self.fb.capsule(b, cam.project(v3(x, 2.2, z)), 9.0, shade(R_STONE, 5), Some(C_OUTLINE));
         }
-        let j = rig::solve(&self.player.anim.pose, &self.props, self.player.pos, self.player.yaw);
-        rig::draw(&mut self.fb, &cam, &j, &self.props, &self.look);
+        let j = self.player_joints();
+        let mut map = self.player.def.colors;
+        if self.flash > 0.0 {
+            map = map.flashed();
+        }
+        render::draw_character(&mut self.fb, &cam, &j, &self.player.def, &self.gear, &map, &self.opts);
         for (a, b, _) in &self.trail {
             let (pa, pb) = (cam.project(*a), cam.project(*b));
             self.fb.line(pa, pb, C_TRAIL);
@@ -245,12 +292,12 @@ impl Game {
                 let (tx, tz) = (gx.floor(), gz.floor());
                 let (fx, fz) = (gx - tx, gz - tz);
                 let hsh = ((tx as i32).wrapping_mul(73856093) ^ (tz as i32).wrapping_mul(19349663)) as u32;
-                let base = if (tx as i32 + tz as i32) & 1 == 0 { 2 } else { 15 };
-                let base = if hsh % 11 == 0 { 1 } else { base };
+                let base = if (tx as i32 + tz as i32) & 1 == 0 { shade(R_STONE, 2) } else { shade(R_STONE, 4) };
+                let base = if hsh.is_multiple_of(11) { shade(R_STONE, 1) } else { base };
                 *px = if fx < 0.03 || fz < 0.03 {
-                    3
-                } else if (hsh >> 8) % 7 == 0 && ((fx * 7.0) as i32 + (fz * 5.0) as i32) % 5 == 0 {
-                    13 // pebbles
+                    shade(R_STONE, 1)
+                } else if (hsh >> 8).is_multiple_of(7) && ((fx * 7.0) as i32 + (fz * 5.0) as i32) % 5 == 0 {
+                    shade(R_STONE, 5) // pebbles
                 } else {
                     base
                 };

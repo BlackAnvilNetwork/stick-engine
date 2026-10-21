@@ -1,0 +1,12 @@
+// Hit flinch: additive deltas on top of whatever is playing.
+(
+    name: "hit_flinch",
+    duration: 0.25,
+    looping: false,
+    mask: Additive,
+    keys: [
+        (t: 0.00, pose: { "lean": 0.0 }),
+        (t: 0.06, pose: { "lean": -12.0, "head": -15.0, "bob": -0.03 }),
+        (t: 0.25, pose: { "lean": 0.0, "head": 0.0, "bob": 0.0 }),
+    ],
+)

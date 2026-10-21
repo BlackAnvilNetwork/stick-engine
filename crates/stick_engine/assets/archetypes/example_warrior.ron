@@ -1,0 +1,17 @@
+// Example archetype (demo/test content). Ranges + choices; the seed picks.
+(
+    id: "example_warrior",
+    sex: None,
+    shoulder_mul: (0.95, 1.10),
+    thickness: (0.95, 1.15),
+    slouch: (-2.0, 4.0),
+    gait_speed: (0.9, 1.1),
+    arm_swing: (0.7, 1.1),
+    accent: ["blood", "team_blue", "team_green", "gold"],
+    gear: {
+        MainHand: ["sword", "greatsword"],
+        OffHand: ["shield", ""],
+        Chest: ["cuirass", ""],
+    },
+    stances: ["1h", "1h_shield", "2h"],
+)

@@ -1,0 +1,17 @@
+// Dodge roll: whole-body forward roll on root_pitch (0 -> 360). Lean only
+// bends the spine, so rolls must use root_pitch. Angle signs are a starting
+// point; tune in the pose editor.
+(
+    name: "dodge_roll",
+    duration: 0.55,
+    looping: false,
+    mask: Full,
+    keys: [
+        (t: 0.00, pose: { "root_pitch": 0.0,   "bob": 0.0,   "l_hip": 20.0,  "r_hip": 20.0,  "l_knee": 20.0,  "r_knee": 20.0,  "l_shoulder": 30.0, "r_shoulder": 30.0, "r_wpn_pitch": -40.0 }),
+        (t: 0.12, pose: { "root_pitch": 50.0,  "lean": 30.0, "bob": -0.35, "l_hip": 90.0,  "r_hip": 90.0,  "l_knee": 120.0, "r_knee": 120.0, "l_shoulder": 80.0, "r_shoulder": 80.0, "l_elbow": 90.0, "r_elbow": 90.0, "r_wpn_pitch": -40.0 }),
+        (t: 0.28, pose: { "root_pitch": 200.0, "lean": 35.0, "bob": -0.45, "l_hip": 100.0, "r_hip": 100.0, "l_knee": 130.0, "r_knee": 130.0, "l_shoulder": 80.0, "r_shoulder": 80.0, "l_elbow": 90.0, "r_elbow": 90.0, "r_wpn_pitch": -40.0 }),
+        (t: 0.44, pose: { "root_pitch": 330.0, "lean": 20.0, "bob": -0.30, "l_hip": 70.0,  "r_hip": 70.0,  "l_knee": 100.0, "r_knee": 100.0, "l_shoulder": 50.0, "r_shoulder": 50.0, "r_wpn_pitch": -40.0 }),
+        (t: 0.55, pose: { "root_pitch": 360.0, "lean": 0.0,  "bob": 0.0,   "l_hip": 20.0,  "r_hip": 20.0,  "l_knee": 20.0,  "r_knee": 20.0,  "l_shoulder": 20.0, "r_shoulder": 20.0, "r_wpn_pitch": -40.0 }),
+    ],
+    events: [ (t: 0.05, name: "iframes_start"), (t: 0.42, name: "iframes_end") ],
+)

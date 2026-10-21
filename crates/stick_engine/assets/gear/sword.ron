@@ -1,0 +1,15 @@
+// Example one-handed sword (demo/test content). Shapes are in the hand frame:
+// +y runs along the blade (r_wpn_yaw/pitch), units are metres.
+(
+    id: "sword",
+    slot: MainHand,
+    stance: Some("1h"),
+    reach: 0.9,
+    swing_weight: 1.0,
+    material: Some("steel"),
+    shapes: [
+        Capsule(from: (0.0, -0.10, 0.0), to: (0.0, 0.06, 0.0), ramp: Trim, thick: 1.2),   // grip
+        Capsule(from: (-0.11, 0.06, 0.0), to: (0.11, 0.06, 0.0), ramp: Trim, thick: 1.0), // crossguard
+        Capsule(from: (0.0, 0.06, 0.0), to: (0.0, 0.9, 0.0), ramp: Material, thick: 1.0), // blade
+    ],
+)

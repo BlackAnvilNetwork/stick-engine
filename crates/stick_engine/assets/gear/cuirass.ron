@@ -1,0 +1,11 @@
+// Example chest armour: thickens the torso and upper arms, adds pauldrons.
+(
+    id: "cuirass",
+    slot: Chest,
+    material: Some("steel"),
+    thickness_mul: { "spine": 1.45, "l_upper_arm": 1.15, "r_upper_arm": 1.15, "shoulders": 1.2 },
+    shapes: [
+        Disc(at: Some("l_shoulder"), r: 0.075, ramp: Material),
+        Disc(at: Some("r_shoulder"), r: 0.075, ramp: Material),
+    ],
+)

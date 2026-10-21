@@ -1,0 +1,15 @@
+// Action table: action id -> mode, blend, per-stance clips and movement rules.
+// Adding a move = one clip file + one row here (no Rust changes).
+// Clip lookup: stances[stance] -> stances["any"] -> unavailable.
+[
+    (id: "idle", mode: Idle, blend: 0.15, stances: { "any": "idle" }),
+    (id: "walk", mode: Gait(speed: 2.2), blend: 0.15),
+    (id: "run", mode: Gait(speed: 5.2), blend: 0.12),
+    (id: "dash", mode: OneShot(next: "idle"), blend: 0.04, stances: { "any": "dash" },
+        move_mult: 0.0, root_motion: Some(Dash(speed: 13.0)), cooldown: 0.45, face: Move),
+    (id: "swing", mode: OneShot(next: "idle"), blend: 0.05, stances: { "any": "swing" },
+        move_mult: 0.2, face: Aim, weapon: true),
+    (id: "dodge", mode: OneShot(next: "idle"), blend: 0.03, stances: { "any": "dodge_roll" },
+        move_mult: 0.0, root_motion: Some(Dash(speed: 7.0)), cooldown: 0.6, face: Move),
+    (id: "flinch", mode: Additive, blend: 0.0, stances: { "any": "hit_flinch" }),
+]

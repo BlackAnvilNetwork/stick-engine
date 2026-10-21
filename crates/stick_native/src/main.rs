@@ -3,7 +3,7 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 use std::time::Instant;
 use stick_engine::game::{Game, Input};
-use stick_engine::raster::PALETTE;
+use stick_engine::raster::LUT;
 use stick_engine::{HEIGHT, WIDTH};
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
@@ -63,6 +63,8 @@ impl ApplicationHandler for App {
                         KeyCode::ShiftLeft | KeyCode::ShiftRight => i.run = down,
                         KeyCode::Space => i.dash = down,
                         KeyCode::KeyJ => i.attack = down,
+                        KeyCode::KeyH => i.hair_style = down,
+                        KeyCode::KeyK => i.hair_color = down,
                         KeyCode::Escape => el.exit(),
                         _ => {}
                     }
@@ -112,7 +114,7 @@ impl ApplicationHandler for App {
                     let row = &src[(y / s) * WIDTH..(y / s + 1) * WIDTH];
                     let dst = &mut buf[(y + oy) * ww + ox..];
                     for x in 0..(WIDTH * s).min(ww - ox) {
-                        dst[x] = PALETTE[row[x / s] as usize & 15];
+                        dst[x] = LUT[row[x / s] as usize];
                     }
                 }
                 buf.present().expect("present");

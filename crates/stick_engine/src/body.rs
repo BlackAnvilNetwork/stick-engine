@@ -36,6 +36,15 @@ impl Sex {
     }
 }
 
+/// Cosmetic hair silhouette drawn on the head (body ramp, one shade darker).
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HairStyle {
+    #[default]
+    None,
+    Bob,
+    Ponytail,
+}
+
 /// Body proportions in metres. Widths are FULL widths (the rig uses half).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyParams {
@@ -58,6 +67,18 @@ pub struct BodyParams {
     /// Chest silhouette cue: radius in metres of each of the two small chest
     /// discs (0 = none). A body parameter, not a rig bone.
     pub chest: f32,
+    /// Torso width at the waist (m, full width). Torso is drawn as a filled
+    /// tapered silhouette: hips -> waist -> bust -> shoulders.
+    pub waist_w: f32,
+    /// Torso front-to-back depth (m); what the side view shows.
+    pub torso_depth: f32,
+    /// Thigh radius multiplier at the hip (tapers to the knee).
+    pub thigh_w: f32,
+    /// Arm radius multiplier.
+    pub arm_thick: f32,
+    /// Shin/calf radius multiplier.
+    pub calf_thick: f32,
+    pub hair: HairStyle,
 }
 
 impl BodyParams {
@@ -68,10 +89,19 @@ impl BodyParams {
             height: 0.0, thigh: 0.46, shin: 0.46, upper_arm: 0.30, forearm: 0.28, torso: 0.52,
             neck: 0.08, head_r: 0.13, shoulder_w: 0.40, hip_w: 0.22, limb_px: 2.2, thickness: 1.0,
             bone_thickness_mul: [1.0; N_BONES], chest: 0.0,
+            // V-taper: broad shoulders, narrow waist and hips, heavier limbs
+            waist_w: 0.22, torso_depth: 0.21, thigh_w: 1.2, arm_thick: 1.15, calf_thick: 1.05,
+            hair: HairStyle::None,
         };
+        let m = BodyParams { shoulder_w: 0.46, ..m };
         let b = match sex {
             Sex::Male => m,
-            Sex::Female => BodyParams { head_r: 0.125, shoulder_w: 0.34, hip_w: 0.26, thickness: 0.92, chest: 0.056, ..m }
+            Sex::Female => BodyParams {
+                head_r: 0.125, shoulder_w: 0.32, hip_w: 0.27, thickness: 0.92, chest: 0.062,
+                // hourglass: defined waist, wide hips, full tapering thighs, slim arms/calves
+                waist_w: 0.18, torso_depth: 0.17, thigh_w: 1.7, arm_thick: 0.78, calf_thick: 0.85,
+                hair: HairStyle::Bob, ..m
+            }
                 .scaled(1.68 / 1.80),
         };
         BodyParams { height: b.computed_height(), ..b }
@@ -84,7 +114,7 @@ impl BodyParams {
     pub fn scaled(&self, k: f32) -> BodyParams {
         let mut b = *self;
         for v in [&mut b.thigh, &mut b.shin, &mut b.upper_arm, &mut b.forearm, &mut b.torso, &mut b.neck,
-            &mut b.head_r, &mut b.shoulder_w, &mut b.hip_w, &mut b.chest] {
+            &mut b.head_r, &mut b.shoulder_w, &mut b.hip_w, &mut b.chest, &mut b.waist_w, &mut b.torso_depth] {
             *v *= k;
         }
         b.height = b.computed_height();
@@ -93,6 +123,22 @@ impl BodyParams {
     /// Scale so the standing height equals `h`.
     pub fn with_height(&self, h: f32) -> BodyParams {
         self.scaled(h / self.computed_height())
+    }
+    /// Blend the shape fields (widths, depth, limb multipliers, chest) toward
+    /// `o` by `t` (0 = self). Lengths/height stay; hair switches at t >= 0.5.
+    /// Lets archetypes sit anywhere between the male and female builds.
+    pub fn blend_shape(&self, o: &BodyParams, t: f32) -> BodyParams {
+        let t = t.clamp(0.0, 1.0);
+        let k = self.height / o.height.max(1e-3); // compare at equal height
+        let l = |a: f32, b: f32| a + (b - a) * t;
+        BodyParams {
+            shoulder_w: l(self.shoulder_w, o.shoulder_w * k), waist_w: l(self.waist_w, o.waist_w * k),
+            hip_w: l(self.hip_w, o.hip_w * k), torso_depth: l(self.torso_depth, o.torso_depth * k),
+            chest: l(self.chest, o.chest * k), thigh_w: l(self.thigh_w, o.thigh_w),
+            arm_thick: l(self.arm_thick, o.arm_thick), calf_thick: l(self.calf_thick, o.calf_thick),
+            hair: if t >= 0.5 { o.hair } else { self.hair },
+            ..*self
+        }
     }
     /// Limb radius in px for a bone.
     pub fn limb_radius(&self, b: crate::rig::Bone) -> f32 {
@@ -217,6 +263,13 @@ impl CharacterDef {
         if let Some((lo, hi)) = a.chest_mul {
             body.chest *= r.range(lo, hi);
         }
+        if let Some((lo, hi)) = a.shape_mix {
+            let other = BodyParams::preset(if sex == Sex::Male { Sex::Female } else { Sex::Male });
+            body = body.blend_shape(&other, r.range(lo, hi));
+        }
+        if !a.hair.is_empty() {
+            body.hair = a.hair[r.below(a.hair.len() as u32) as usize];
+        }
         Ok(CharacterDef { seed, sex, body, colors, personality, gear })
     }
 }
@@ -256,6 +309,13 @@ pub struct Archetype {
     /// Optional multiplier range for `BodyParams::chest` (e.g. (0.85, 1.15)).
     #[serde(default)]
     pub chest_mul: Option<(f32, f32)>,
+    /// Optional range blending the body shape toward the opposite sex's
+    /// preset (0 = pure preset). Cosmetic only.
+    #[serde(default)]
+    pub shape_mix: Option<(f32, f32)>,
+    /// Hair styles to pick from (empty = keep the preset's).
+    #[serde(default)]
+    pub hair: Vec<HairStyle>,
 }
 fn h_m() -> (f32, f32) {
     (1.70, 1.95)

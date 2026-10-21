@@ -555,3 +555,77 @@ fn chest_spring_deterministic_and_armour_damps() {
     };
     assert!(drive(0.25) < drive(1.0) * 0.5);
 }
+
+// ---- body shape (V-taper / hourglass) ----
+
+#[test]
+fn shape_presets_read_male_and_female() {
+    use crate::body::HairStyle;
+    let (m, f) = (BodyParams::preset(Sex::Male), BodyParams::preset(Sex::Female));
+    // male: V-taper, shoulders much wider than waist and hips
+    assert!(m.shoulder_w / m.waist_w > 1.9 && m.shoulder_w > m.hip_w * 1.8);
+    // female: defined waist, hips wider than waist, near shoulder width
+    assert!(f.hip_w > f.waist_w * 1.4 && f.shoulder_w / f.hip_w < m.shoulder_w / m.hip_w * 0.7);
+    assert!(f.thigh_w > m.thigh_w && f.arm_thick < m.arm_thick && f.calf_thick < m.calf_thick);
+    assert!(f.chest > 0.056 * 1.68 / 1.80);
+    assert_eq!((m.hair, f.hair), (HairStyle::None, HairStyle::Bob));
+    // scaling keeps proportions
+    let s = f.scaled(1.1);
+    assert!((s.waist_w / s.hip_w - f.waist_w / f.hip_w).abs() < 1e-5);
+}
+
+#[test]
+fn blend_shape_interpolates_between_presets() {
+    let (m, f) = (BodyParams::preset(Sex::Male), BodyParams::preset(Sex::Female));
+    assert_eq!(m.blend_shape(&f, 0.0), m);
+    let k = m.height / f.height;
+    let full = m.blend_shape(&f, 1.0);
+    assert!((full.waist_w - f.waist_w * k).abs() < 1e-5 && full.thigh_w == f.thigh_w && full.hair == f.hair);
+    assert_eq!((full.height, full.torso), (m.height, m.torso)); // lengths untouched
+    let mid = m.blend_shape(&f, 0.5);
+    assert!(mid.shoulder_w < m.shoulder_w && mid.shoulder_w > f.shoulder_w * k);
+}
+
+#[test]
+fn archetype_shape_mix_and_hair_are_deterministic() {
+    use crate::body::{Archetype, CharacterDef, HairStyle};
+    let g = Game::new(640, 360);
+    let a = Archetype::from_ron(r#"(id: "t", sex: Some(Male), shape_mix: Some((0.2, 0.4)), hair: [Ponytail])"#).unwrap();
+    let d1 = CharacterDef::from_seed(7, &a, &g.gear).unwrap();
+    assert_eq!(d1, CharacterDef::from_seed(7, &a, &g.gear).unwrap());
+    let m = BodyParams::preset(Sex::Male);
+    assert!(d1.body.waist_w < m.waist_w * (d1.body.height / m.height) + 1e-6);
+    assert_eq!(d1.body.hair, HairStyle::Ponytail);
+    // archetypes without the new fields keep their previous bodies
+    let plain = Archetype::from_ron(r#"(id: "p", sex: Some(Female))"#).unwrap();
+    assert_eq!(CharacterDef::from_seed(7, &plain, &g.gear).unwrap().body.hair, HairStyle::Bob);
+}
+
+#[test]
+fn torso_silhouette_tapers_and_foreshortens() {
+    use crate::render::torso_stations;
+    let cam = crate::camera::Camera::new(640, 360);
+    let front = std::f32::consts::FRAC_PI_4; // facing the camera
+    let solve = |b: &BodyParams, yaw: f32| rig::solve(&Pose::default(), b, v3(0.0, 0.0, 0.0), yaw, 0.0);
+    let (m, f) = (BodyParams::preset(Sex::Male), BodyParams::preset(Sex::Female));
+    let (sm, _) = torso_stations(&cam, &solve(&m, front), &m);
+    let (sf, _) = torso_stations(&cam, &solve(&f, front), &f);
+    // stations: hips, waist, bust, shoulders, trapezius
+    assert!(sm[3].1 > sm[1].1 * 1.7, "male V: {sm:?}");
+    assert!(sm[0].1 < sm[3].1 * 0.7);
+    assert!(sf[0].1 > sf[1].1 * 1.3, "female hips: {sf:?}");
+    assert!(sf[3].1 / sf[0].1 < sm[3].1 / sm[0].1);
+    // profile is narrower than the front view, but never collapses to a line
+    let (side, _) = torso_stations(&cam, &solve(&m, front + std::f32::consts::FRAC_PI_2), &m);
+    assert!(side[3].1 < sm[3].1 * 0.7 && side[3].1 > 1.5);
+}
+
+#[test]
+fn female_hair_and_shape_draw_pixels() {
+    let mut g = Game::new(640, 360);
+    g.render();
+    let male: Vec<u8> = g.fb.color.clone();
+    g.run_cmd(crate::ui::UiCmd::ToggleSex);
+    g.render();
+    assert_ne!(male, g.fb.color);
+}

@@ -124,6 +124,87 @@ impl Framebuffer {
             }
         }
     }
+    /// Tapered limb: like `capsule` but the radius goes linearly from `ra`
+    /// at `a` to `rb` at `b` (thighs, calves, deltoids).
+    pub fn cone(&mut self, a: P2, b: P2, ra: f32, rb: f32, c: u8, outline: Option<u8>) {
+        let pad = if outline.is_some() { 1.0 } else { 0.0 };
+        let rm = ra.max(rb) + pad;
+        let x0 = (a.x.min(b.x) - rm).floor() as i32;
+        let x1 = (a.x.max(b.x) + rm).ceil() as i32;
+        let y0 = (a.y.min(b.y) - rm).floor() as i32;
+        let y1 = (a.y.max(b.y) + rm).ceil() as i32;
+        let (abx, aby) = (b.x - a.x, b.y - a.y);
+        let l2 = (abx * abx + aby * aby).max(1e-6);
+        for y in y0.max(0)..=y1.min(self.h as i32 - 1) {
+            for x in x0.max(0)..=x1.min(self.w as i32 - 1) {
+                let (px, py) = (x as f32 + 0.5 - a.x, y as f32 + 0.5 - a.y);
+                let t = ((px * abx + py * aby) / l2).clamp(0.0, 1.0);
+                let (dx, dy) = (px - abx * t, py - aby * t);
+                let dist = (dx * dx + dy * dy).sqrt();
+                let r = ra + (rb - ra) * t;
+                let d = a.d + (b.d - a.d) * t;
+                if dist <= r {
+                    self.plot(x, y, d, c);
+                } else if dist <= r + pad {
+                    if let Some(o) = outline {
+                        self.plot(x, y, d + 0.25, o);
+                    }
+                }
+            }
+        }
+    }
+    /// Filled silhouette strip: a chain of `(centre, half_width)` stations
+    /// joined by trapezoids whose edges sit at `centre +- n * half_width`
+    /// (`n` = unit screen normal of the strip). Depth interpolates along the
+    /// strip. With an outline, a 1 px larger strip is drawn behind first.
+    pub fn ribbon(&mut self, st: &[(P2, f32)], n: (f32, f32), c: u8, outline: Option<u8>) {
+        if let Some(o) = outline {
+            let mut big: Vec<(P2, f32)> = st.iter().map(|(p, h)| (P2 { d: p.d + 0.25, ..*p }, h + 1.0)).collect();
+            // extend the ends by 1 px along the strip
+            let k = big.len();
+            if k >= 2 {
+                for (i, j) in [(0, 1), (k - 1, k - 2)] {
+                    let (dx, dy) = (big[i].0.x - big[j].0.x, big[i].0.y - big[j].0.y);
+                    let l = (dx * dx + dy * dy).sqrt().max(1e-3);
+                    big[i].0.x += dx / l;
+                    big[i].0.y += dy / l;
+                }
+            }
+            self.ribbon(&big, n, o, None);
+        }
+        for w in st.windows(2) {
+            let ((p0, h0), (p1, h1)) = (w[0], w[1]);
+            let q = [
+                (p0.x + n.0 * h0, p0.y + n.1 * h0),
+                (p1.x + n.0 * h1, p1.y + n.1 * h1),
+                (p1.x - n.0 * h1, p1.y - n.1 * h1),
+                (p0.x - n.0 * h0, p0.y - n.1 * h0),
+            ];
+            let x0 = q.iter().map(|v| v.0).fold(f32::INFINITY, f32::min).floor() as i32;
+            let x1 = q.iter().map(|v| v.0).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            let y0 = q.iter().map(|v| v.1).fold(f32::INFINITY, f32::min).floor() as i32;
+            let y1 = q.iter().map(|v| v.1).fold(f32::NEG_INFINITY, f32::max).ceil() as i32;
+            let (ax, ay) = (p1.x - p0.x, p1.y - p0.y);
+            let l2 = (ax * ax + ay * ay).max(1e-6);
+            for y in y0.max(0)..=y1.min(self.h as i32 - 1) {
+                for x in x0.max(0)..=x1.min(self.w as i32 - 1) {
+                    let (fx, fy) = (x as f32 + 0.5, y as f32 + 0.5);
+                    let (mut pos, mut neg) = (false, false);
+                    for i in 0..4 {
+                        let (u, v) = (q[i], q[(i + 1) % 4]);
+                        let cr = (v.0 - u.0) * (fy - u.1) - (v.1 - u.1) * (fx - u.0);
+                        pos |= cr > 1e-4;
+                        neg |= cr < -1e-4;
+                    }
+                    if pos && neg {
+                        continue;
+                    }
+                    let t = (((fx - p0.x) * ax + (fy - p0.y) * ay) / l2).clamp(0.0, 1.0);
+                    self.plot(x, y, p0.d + (p1.d - p0.d) * t, c);
+                }
+            }
+        }
+    }
     pub fn disc(&mut self, p: P2, r: f32, c: u8, outline: Option<u8>) {
         self.capsule(p, p, r, c, outline);
     }

@@ -14,4 +14,4 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 stick_engine = { path = "../stick_engine" }
 wasm-bindgen = "0.2"
-web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "KeyboardEvent", "MouseEvent", "Event", "EventTarget", "DomRect", "Location"] }
+web-sys = { version = "0.3", features = ["Window", "Document", "Element", "HtmlCanvasElement", "CanvasRenderingContext2d", "ImageData", "KeyboardEvent", "MouseEvent", "Event", "EventTarget", "DomRect", "Location", "Storage"] }

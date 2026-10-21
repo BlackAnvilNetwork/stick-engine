@@ -827,3 +827,127 @@ mod perspective {
         assert!(g.cam.view.is_none() && g.player.pos.x > 0.2);
     }
 }
+
+mod camera_input {
+    use crate::camrig::{CamConfig, CamMode};
+    use crate::game::{Game, Input, FOG_COLOR};
+    use crate::input::{Action, Bindings, CamControl, Settings};
+    use crate::math::angle_diff;
+    use crate::raster::{shade, R_VOID};
+
+    #[test]
+    fn numpad_bindings_drive_camera_actions() {
+        let b = Bindings::default();
+        assert_eq!(b.action("Numpad4"), Some(Action::CamTurnLeft));
+        assert_eq!(b.action("Numpad6"), Some(Action::CamTurnRight));
+        assert_eq!(b.action("Numpad8"), Some(Action::CamPitchUp));
+        assert_eq!(b.action("Numpad2"), Some(Action::CamPitchDown));
+        assert_eq!(b.action("Numpad5"), Some(Action::CamCycle));
+        assert_eq!(b.action("NumpadDecimal"), Some(Action::CamControlToggle));
+        for k in ["KeyQ", "KeyE", "KeyR", "KeyF"] {
+            assert_eq!(b.action(k), None, "{k} no longer a camera key");
+        }
+        // No code is bound twice.
+        let mut ks: Vec<_> = b.keys.iter().map(|(k, _)| *k).collect();
+        ks.sort();
+        ks.dedup();
+        assert_eq!(ks.len(), b.keys.len());
+        let mut i = Input::default();
+        assert!(b.apply(&mut i, "Numpad6", true) && i.look_right);
+        assert!(!b.apply(&mut i, "KeyZ", true));
+    }
+
+    #[test]
+    fn settings_round_trip_and_defaults() {
+        assert_eq!(Settings::default().cam_control, CamControl::Numpad);
+        let s = Settings { cam_control: CamControl::Mouse };
+        assert_eq!(Settings::parse(&s.to_text()), s);
+        assert_eq!(Settings::parse("cam_control=bogus\nother=1"), Settings::default());
+    }
+
+    fn tp_game() -> Game {
+        let mut g = Game::new(640, 360);
+        g.set_cam_config(CamConfig { mode: CamMode::ThirdPerson, ..CamConfig::default() });
+        g
+    }
+
+    #[test]
+    fn numpad_turns_and_pitches_only_in_numpad_mode() {
+        let mut g = tp_game();
+        let (y0, p0) = (g.player.yaw, g.rig.fp_pitch);
+        let mut i = Input { look_right: true, look_down: true, ..Input::default() };
+        for _ in 0..20 {
+            g.update(1.0 / 60.0, &mut i);
+        }
+        assert!(angle_diff(y0, g.player.yaw) < -0.3);
+        assert!(g.rig.fp_pitch > p0);
+        g.settings.cam_control = CamControl::Mouse;
+        let (y1, p1) = (g.player.yaw, g.rig.fp_pitch);
+        for _ in 0..20 {
+            g.update(1.0 / 60.0, &mut i);
+        }
+        assert_eq!(g.player.yaw, y1);
+        assert_eq!(g.rig.fp_pitch, p1);
+    }
+
+    #[test]
+    fn mouse_right_drag_turns_but_a_right_click_still_moves() {
+        let mut g = tp_game();
+        g.settings.cam_control = CamControl::Mouse;
+        let y0 = g.player.yaw;
+        let mut i = Input { rmb: true, mouse: Some((300.0, 200.0)), move_click: Some((300.0, 200.0)), ..Input::default() };
+        g.update(1.0 / 60.0 + 1e-4, &mut i);
+        for k in 1..=10 {
+            i.mouse = Some((300.0 + k as f32 * 6.0, 200.0));
+            g.update(1.0 / 60.0 + 1e-4, &mut i);
+        }
+        assert!(angle_diff(y0, g.player.yaw) < -0.5, "drag right turns right");
+        let p = g.player.pos;
+        i.rmb = false;
+        for _ in 0..30 {
+            g.update(1.0 / 60.0, &mut i);
+        }
+        assert!((g.player.pos - p).len() < 0.2, "the drag cancelled the move order");
+        // A click without a drag is a move order.
+        let mut g = tp_game();
+        g.settings.cam_control = CamControl::Mouse;
+        let p = g.player.pos;
+        let mut i = Input { rmb: true, mouse: Some((320.0, 120.0)), move_click: Some((320.0, 120.0)), ..Input::default() };
+        g.update(1.0 / 60.0 + 1e-4, &mut i);
+        i.rmb = false;
+        for _ in 0..60 {
+            g.update(1.0 / 60.0, &mut i);
+        }
+        assert!((g.player.pos - p).len() > 0.5);
+    }
+
+    #[test]
+    fn control_toggle_flips_and_flags_for_saving() {
+        let mut g = Game::new(640, 360);
+        let mut i = Input { cam_control_toggle: true, ..Input::default() };
+        g.update(1.0 / 60.0 + 1e-4, &mut i);
+        assert_eq!(g.settings.cam_control, CamControl::Mouse);
+        assert!(g.settings_changed);
+    }
+
+    #[test]
+    fn third_person_has_sky_gradient_and_fog() {
+        let mut g = tp_game();
+        for _ in 0..30 {
+            g.update(1.0 / 60.0, &mut Input::default());
+        }
+        g.render();
+        let w = g.fb.w;
+        let row = |y: usize| &g.fb.color[y * w..(y + 1) * w];
+        let void = shade(R_VOID, 0);
+        let distinct: std::collections::BTreeSet<u8> = (0..40).flat_map(|y| row(y).iter().copied()).collect();
+        assert!(distinct.len() >= 3, "sky is a gradient, not flat void: {distinct:?}");
+        assert!(!row(0).iter().all(|c| *c == void));
+        let fog = g.fb.color.iter().filter(|c| **c == FOG_COLOR).count();
+        assert!(fog > w * 4, "fog/horizon band present ({fog})");
+        // Iso keeps the old look: no fog colour on the floor.
+        let mut iso = Game::new(640, 360);
+        iso.render();
+        assert!(!iso.fb.color.contains(&FOG_COLOR));
+    }
+}

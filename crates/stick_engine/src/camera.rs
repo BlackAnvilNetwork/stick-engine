@@ -263,6 +263,24 @@ impl GroundMap {
         }
         Some((self.target.x + qx, self.target.z + qz))
     }
+    /// Like `resolve`, but without the `FAR` cut and also returning the eye
+    /// distance (perspective views; ortho returns 0), for fog.
+    #[inline]
+    pub fn resolve_dist(&self, n: [f32; 3]) -> Option<(f32, f32, f32)> {
+        if n[2].abs() < 1e-9 {
+            return None;
+        }
+        let (qx, qz) = (n[0] / n[2], n[1] / n[2]);
+        let mut dist = 0.0;
+        if self.inv_d > 0.0 {
+            let z = qx * self.fwd.x - self.target.y * self.fwd.y + qz * self.fwd.z;
+            dist = 1.0 / self.inv_d + z;
+            if dist <= NEAR {
+                return None;
+            }
+        }
+        Some((self.target.x + qx, self.target.z + qz, dist))
+    }
     pub fn at(&self, sx: f32, sy: f32) -> Option<(f32, f32)> {
         self.resolve(self.raw(sx, sy))
     }

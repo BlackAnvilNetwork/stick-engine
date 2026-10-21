@@ -1,6 +1,7 @@
 //! Minimal playable scene: one stick hero on a procedural tile floor.
 use crate::actions::ActionTable;
 use crate::anim::AnimLibrary;
+use crate::custom::HairOptions;
 use crate::body::{CharacterDef, GearRef, Sex};
 use crate::camera::Camera;
 use crate::character::{Character, Intent};
@@ -28,6 +29,10 @@ pub struct Input {
     pub move_click: Option<(f32, f32)>,
     /// Attack click position (left mouse); attack aims here.
     pub attack_click: Option<(f32, f32)>,
+    /// Held: cycle hair style on press (H).
+    pub hair_style: bool,
+    /// Held: cycle hair colour on press (K).
+    pub hair_color: bool,
 }
 
 struct Particle {
@@ -56,6 +61,8 @@ pub struct Game {
     flash: f32,
     pub time: f32,
     pub demo: bool,
+    /// Player hair options (style + colour), applied on change.
+    pub hair: HairOptions,
     rng: u32,
 }
 
@@ -68,6 +75,8 @@ impl Game {
         let mut def = CharacterDef::new(Sex::Male);
         let sword = gear.index("sword").map(|base| GearRef { base, look_seed: 0 });
         def.equip(GearSlot::MainHand, sword);
+        let hair = HairOptions { hair: crate::body::HairStyle::Buzz, ..HairOptions::default() };
+        hair.apply(&mut def);
         let player = Character::new(0.0, 0.0, def, &gear, &actions);
         Game {
             lib: AnimLibrary::builtin(),
@@ -88,6 +97,7 @@ impl Game {
             flash: 0.0,
             time: 0.0,
             demo: false,
+            hair,
             rng: 0x1234_5678,
         }
     }
@@ -171,10 +181,17 @@ impl Game {
         if request.is_some() {
             self.target = None;
         }
+        if (inp.hair_style && !self.prev.hair_style) || (inp.hair_color && !self.prev.hair_color) {
+            if inp.hair_style && !self.prev.hair_style { self.hair.cycle_style(1); }
+            if inp.hair_color && !self.prev.hair_color { self.hair.cycle_color(1); }
+            self.hair.apply(&mut self.player.def);
+        }
         self.prev = *inp;
         let was = self.player.action;
         let was_hit = self.player.hit_active();
         self.player.step(&self.lib, &self.actions, &it, TICK);
+        let jn = self.player_joints();
+        self.player.update_secondary(&jn, TICK);
 
         // effects
         let p = self.player.pos;
@@ -224,7 +241,9 @@ impl Game {
     pub fn player_joints(&self) -> rig::Joints {
         let c = &self.player;
         let b = c.def.effective_body(&self.gear);
-        rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway)
+        let mut j = rig::solve(&c.anim.pose, &b, c.pos, c.yaw, c.gait.sway);
+        j.hair_sway = c.hair_sway();
+        j
     }
 
     fn spawn_dust(&mut self, p: Vec3, s: f32) {

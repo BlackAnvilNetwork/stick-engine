@@ -398,3 +398,60 @@ fn archetype_ignores_game_specific_fields() {
     let a = Archetype::from_ron(r#"(id: "knight", stances: ["2h"], silhouette: ["crest_tall"], idle_clip: "idle_stoic")"#);
     assert!(a.is_ok(), "{a:?}");
 }
+
+#[test]
+fn hair_options_apply_cycle_and_roundtrip() {
+    use crate::body::{HairStyle, ALL_HAIR};
+    use crate::color::ColorSlot;
+    use crate::custom::HairOptions;
+    let mut d = CharacterDef::new(Sex::Male);
+    let mut h = HairOptions::default();
+    for _ in 0..ALL_HAIR.len() {
+        h.cycle_style(1);
+    }
+    assert_eq!(h.hair, HairStyle::None, "style cycle wraps");
+    h.cycle_style(-1);
+    assert_eq!(h.hair, HairStyle::Pixie);
+    h.cycle_color(1);
+    h.apply(&mut d);
+    assert_eq!(d.body.hair, HairStyle::Pixie);
+    assert_eq!(d.colors.ramp(ColorSlot::Hair), crate::raster::ramp_id("hair_blonde").unwrap());
+    let back = HairOptions::from_ron(&h.to_ron()).unwrap();
+    assert_eq!(back, h);
+    let bad = HairOptions::from_ron("(hair: Bob, hair_color: \"nope\")").unwrap();
+    assert_eq!(bad.hair_color, "hair_black");
+}
+
+#[test]
+fn every_hair_style_draws_pixels_in_the_hair_colour() {
+    use crate::body::ALL_HAIR;
+    use crate::color::{ColorSlot, RampMap};
+    let game = crate::game::Game::new(crate::WIDTH, crate::HEIGHT);
+    let j = game.player_joints();
+    let map = RampMap::default().with(ColorSlot::Hair, crate::raster::ramp_id("hair_red").unwrap());
+    let hc = map.color(ColorSlot::Hair, 3);
+    for s in ALL_HAIR {
+        let mut b = game.player.def.effective_body(&game.gear);
+        b.hair = s;
+        let mut fb = crate::raster::Framebuffer::new(crate::WIDTH, crate::HEIGHT);
+        crate::render::draw_body(&mut fb, &game.cam, &j, &b, &map, &crate::render::DrawOpts::default());
+        let n = fb.color.iter().filter(|&&c| c == hc).count();
+        if s == crate::body::HairStyle::None { assert_eq!(n, 0) } else { assert!(n > 0, "{s:?} drew nothing") }
+    }
+}
+
+#[test]
+fn swaying_hair_moves_and_stays_bounded() {
+    let mut g = crate::game::Game::new(crate::WIDTH, crate::HEIGHT);
+    g.hair.hair = crate::body::HairStyle::Ponytail;
+    g.hair.apply(&mut g.player.def);
+    let mut i = crate::game::Input { right: true, run: true, ..Default::default() };
+    let mut moved = false;
+    for _ in 0..120 {
+        g.update(1.0 / 60.0, &mut i);
+        let s = g.player.hair_sway();
+        assert!(s.x.abs() <= 0.036 && s.y.abs() <= 0.036 && s.z.abs() <= 0.036);
+        moved |= s.x != 0.0 || s.y != 0.0 || s.z != 0.0;
+    }
+    assert!(moved);
+}

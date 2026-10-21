@@ -6,7 +6,7 @@ use crate::gear::{derive_stance, GearLib, GearSlot, ALL_GEAR_SLOTS, N_GEAR_SLOTS
 use crate::math::Pcg32;
 use crate::raster::ramp_id;
 use crate::rig::N_BONES;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +36,53 @@ impl Sex {
     }
 }
 
+/// Cosmetic hair silhouette drawn on the head in the `Hair` colour slot.
+/// `None` = bald. Every style works on every body.
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum HairStyle {
+    #[default]
+    None,
+    Buzz,
+    Spiky,
+    SlickedBack,
+    Mohawk,
+    Topknot,
+    Bob,
+    Ponytail,
+    LongStraight,
+    Pigtails,
+    Pixie,
+}
+
+/// Every style in menu order (bald first).
+pub const ALL_HAIR: [HairStyle; 11] = [
+    HairStyle::None, HairStyle::Buzz, HairStyle::Spiky, HairStyle::SlickedBack, HairStyle::Mohawk,
+    HairStyle::Topknot, HairStyle::Bob, HairStyle::Ponytail, HairStyle::LongStraight, HairStyle::Pigtails,
+    HairStyle::Pixie,
+];
+
+impl HairStyle {
+    /// Styles with loose strands that get spring sway.
+    pub fn sways(self) -> bool {
+        matches!(self, HairStyle::Ponytail | HairStyle::LongStraight | HairStyle::Topknot)
+    }
+    pub fn name(self) -> &'static str {
+        match self {
+            HairStyle::None => "BALD",
+            HairStyle::Buzz => "BUZZ",
+            HairStyle::Spiky => "SPIKY",
+            HairStyle::SlickedBack => "SLICKED BACK",
+            HairStyle::Mohawk => "MOHAWK",
+            HairStyle::Topknot => "TOPKNOT",
+            HairStyle::Bob => "BOB",
+            HairStyle::Ponytail => "PONYTAIL",
+            HairStyle::LongStraight => "LONG STRAIGHT",
+            HairStyle::Pigtails => "TWIN BUNS",
+            HairStyle::Pixie => "PIXIE",
+        }
+    }
+}
+
 /// Body proportions in metres. Widths are FULL widths (the rig uses half).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct BodyParams {
@@ -55,6 +102,8 @@ pub struct BodyParams {
     pub thickness: f32,
     /// Per-bone thickness multipliers (armour writes here).
     pub bone_thickness_mul: [f32; N_BONES],
+    /// Cosmetic hair style (does not affect the rig).
+    pub hair: HairStyle,
 }
 
 impl BodyParams {
@@ -64,7 +113,7 @@ impl BodyParams {
         let m = BodyParams {
             height: 0.0, thigh: 0.46, shin: 0.46, upper_arm: 0.30, forearm: 0.28, torso: 0.52,
             neck: 0.08, head_r: 0.13, shoulder_w: 0.40, hip_w: 0.22, limb_px: 2.2, thickness: 1.0,
-            bone_thickness_mul: [1.0; N_BONES],
+            bone_thickness_mul: [1.0; N_BONES], hair: HairStyle::None,
         };
         let b = match sex {
             Sex::Male => m,

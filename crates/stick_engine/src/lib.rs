@@ -13,6 +13,7 @@ pub mod body;
 pub mod camera;
 pub mod character;
 pub mod color;
+pub mod custom;
 pub mod gait;
 pub mod game;
 pub mod gear;

@@ -23,6 +23,8 @@ fn set_key(i: &mut Input, code: &str, down: bool) -> bool {
         "ShiftLeft" | "ShiftRight" => i.run = down,
         "Space" => i.dash = down,
         "KeyJ" => i.attack = down,
+        "KeyH" => i.hair_style = down,
+        "KeyK" => i.hair_color = down,
         _ => return false,
     }
     true

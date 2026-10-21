@@ -46,6 +46,49 @@ pub struct Character {
     pub dash_dir: (f32, f32),
     cooldowns: Vec<f32>,
     idle_t: f32,
+    /// Hair sway springs on world x, y, z (only for styles that sway).
+    pub hair_spring: [HairSpring; 3],
+}
+
+/// Damped spring for hair secondary motion: the soft mass lags the anchor's
+/// acceleration. `x` = displacement (m) along one world axis.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HairSpring {
+    pub x: f32,
+    pub v: f32,
+    prev_y: f32,
+    prev_vy: f32,
+    primed: u8,
+}
+
+impl HairSpring {
+    /// Natural frequency (Hz); damping ratio. Settles in ~0.25 s.
+    pub const FREQ: f32 = 5.0;
+    pub const ZETA: f32 = 0.45;
+    /// How strongly the anchor's acceleration drives the spring.
+    pub const GAIN: f32 = 1.5;
+    /// Hard bound on the displacement (m).
+    pub const MAX: f32 = 0.035;
+
+    pub fn step(&mut self, y: f32, dt: f32, gain: f32) {
+        if dt <= 0.0 {
+            return;
+        }
+        let vy = if self.primed > 0 { (y - self.prev_y) / dt } else { 0.0 };
+        let ay = if self.primed > 1 { (vy - self.prev_vy) / dt } else { 0.0 };
+        self.prev_y = y;
+        self.prev_vy = vy;
+        self.primed = (self.primed + 1).min(2);
+        let w = std::f32::consts::TAU * Self::FREQ;
+        let drive = -(ay * Self::GAIN * gain).clamp(-60.0, 60.0);
+        let a = drive - w * w * self.x - 2.0 * Self::ZETA * w * self.v;
+        self.v += a * dt;
+        self.x += self.v * dt;
+        if self.x.abs() > Self::MAX {
+            self.x = self.x.clamp(-Self::MAX, Self::MAX);
+            self.v = 0.0;
+        }
+    }
 }
 
 impl Character {
@@ -54,9 +97,29 @@ impl Character {
             pos: v3(x, 0.0, z), yaw: 0.8, vel: (0.0, 0.0), action: actions.idle, stance: String::new(),
             swing_weight: 1.0, def, anim: Animator::new(), gait: Gait::default(), windows: Windows::default(),
             dash_dir: (1.0, 0.0), cooldowns: vec![0.0; actions.defs.len()], idle_t: 0.0,
+            hair_spring: [HairSpring::default(); 3],
         };
         c.refresh_gear(gear);
         c
+    }
+
+    /// Advance hair secondary motion from freshly solved joints (call once
+    /// per tick after `step`).
+    pub fn update_secondary(&mut self, j: &crate::rig::Joints, dt: f32) {
+        if self.def.body.hair.sways() {
+            let h = j.get(crate::rig::Joint::Head);
+            for (s, v) in self.hair_spring.iter_mut().zip([h.x, h.y, h.z]) {
+                s.step(v, dt, Self::HAIR_GAIN);
+            }
+        } else {
+            self.hair_spring = [HairSpring::default(); 3];
+        }
+    }
+    pub const HAIR_GAIN: f32 = 1.6;
+    /// Current hair sway offset (world metres) for `Joints::hair_sway`.
+    pub fn hair_sway(&self) -> crate::math::Vec3 {
+        let [x, y, z] = self.hair_spring;
+        crate::math::v3(x.x, y.x, z.x)
     }
 
     /// Recompute stance and swing weight after the gear changed.

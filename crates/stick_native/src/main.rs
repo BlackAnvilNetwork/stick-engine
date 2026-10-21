@@ -63,6 +63,8 @@ impl ApplicationHandler for App {
                         KeyCode::ShiftLeft | KeyCode::ShiftRight => i.run = down,
                         KeyCode::Space => i.dash = down,
                         KeyCode::KeyJ => i.attack = down,
+                        KeyCode::KeyH => i.hair_style = down,
+                        KeyCode::KeyK => i.hair_color = down,
                         KeyCode::Escape => el.exit(),
                         _ => {}
                     }
